@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { Stage, DAY_SECONDS } from '../scene/Stage';
 import { Props } from './props';
 import { WALK_R, ISLAND_R, heightAt, isDry } from './terrain';
+import { MAT } from '../render/hero/materials';
 
 export interface HashEntry {
   id: number;
@@ -47,6 +48,13 @@ export class World {
     this.elapsed += dt;
     this.day = (this.day + dt / DAY_SECONDS) % 1;
     this.stage.setDayNight(this.day);
+    // Night fix: outlines are unlit and the rim is additive, so both glowed like
+    // neon after dark. Dim them with the night; daytime (nightness 0) is unchanged.
+    const n = this.nightness;
+    if (MAT.built) {
+      MAT.outline.color.setScalar(1 - 0.75 * n);
+      MAT.rimStrength.value = 0.30 * (1 - 0.85 * n);
+    }
     this.props.update(dt);
     this.rebuildHash();
   }
