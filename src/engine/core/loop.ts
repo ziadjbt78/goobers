@@ -6,6 +6,8 @@
  * therefore degrades into slow motion instead of teleporting every creature
  * forward — the single biggest source of "the World moves wrong".
  */
+import { stats } from './stats';
+
 export type SimFn = (dt: number, tick: number) => void;
 export type RenderFn = (alpha: number, dt: number) => void;
 
@@ -41,6 +43,7 @@ export class Loop {
       if (!Number.isFinite(dt) || dt < 0) dt = 0;
       if (dt > MAX_FRAME_DT) dt = MAX_FRAME_DT;
       this.acc += dt;
+      const t0 = performance.now();
       let steps = 0;
       while (this.acc >= FIXED_DT && steps < MAX_SUBSTEPS) {
         this.onSim(FIXED_DT, this.tick++);
@@ -50,7 +53,12 @@ export class Loop {
       // never let the accumulator run away: drop the remainder rather than
       // paying it back as a burst of steps on the next frame
       if (steps === MAX_SUBSTEPS) this.acc = 0;
+      const t1 = performance.now();
       this.onRender(this.acc / FIXED_DT, dt);
+      const t2 = performance.now();
+      stats.simMs += (t1 - t0 - stats.simMs) * 0.1;
+      stats.renderMs += (t2 - t1 - stats.renderMs) * 0.1;
+      stats.steps = steps;
     };
     this.raf = requestAnimationFrame(frame);
   }

@@ -12,6 +12,11 @@ export class Stats {
   fps = 0;
   ms = 0;
   cpuMs = 0;
+  /** smoothed per-frame cost of the fixed-step simulation */
+  simMs = 0;
+  /** smoothed CPU cost of the render call */
+  renderMs = 0;
+  steps = 0;
   drawCalls = 0;
   triangles = 0;
   programs = 0;
@@ -93,6 +98,7 @@ export class Stats {
       `FPS   ${String(Math.max(0, this.fps)).padStart(3)}   (${this.ms.toFixed(2)} ms avg, ${peak} ms peak)\n` +
       `draws ${this.drawCalls}  tris ${(this.triangles / 1000).toFixed(1)}k  progs ${this.programs}` +
       (this.creatures ? `  creatures ${this.creatures}` : '') + '\n' +
+      `sim ${this.simMs.toFixed(1)} ms (${this.steps} steps)  render ${this.renderMs.toFixed(1)} ms  other ${Math.max(0, this.ms - this.simMs - this.renderMs).toFixed(1)} ms\n` +
       line;
   }
 }
