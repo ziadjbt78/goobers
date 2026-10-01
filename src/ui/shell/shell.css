@@ -1,0 +1,17 @@
+.sh-menu {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 40;
+  display: flex; align-items: center; gap: 4px; padding: 5px 6px 5px 12px;
+  border-radius: 999px; background: rgba(255, 255, 255, .86);
+  box-shadow: 0 10px 26px rgba(20, 40, 70, .24);
+  backdrop-filter: blur(8px);
+  font: 700 11.5px/1 ui-rounded, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.sh-brand { margin-right: 8px; letter-spacing: .18em; color: #16283a; font-size: 10.5px; }
+.sh-tab {
+  border: 0; border-radius: 999px; padding: 7px 13px; cursor: pointer;
+  background: transparent; color: #33506c; font: inherit; letter-spacing: .04em;
+  transition: background .12s ease, color .12s ease;
+}
+.sh-tab:hover { background: rgba(70, 130, 200, .16); }
+.sh-tab-on { background: #2f6fb0; color: #fff; }
+.sh-tab-on:hover { background: #2f6fb0; }
