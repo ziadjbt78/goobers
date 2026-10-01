@@ -50,7 +50,9 @@ export class World {
     this.stage.setDayNight(this.day);
     // Night fix: outlines are unlit and the rim is additive, so both glowed like
     // neon after dark. Dim them with the night; daytime (nightness 0) is unchanged.
-    const n = this.nightness;
+    // nightness only peaks at midnight, but the sky is dark by dusk: ramp ~3x faster
+    const n0 = this.nightness;
+    const n = n0 >= 0.35 ? 1 : (n0 / 0.35) * (n0 / 0.35) * (3 - 2 * (n0 / 0.35));
     if (MAT.built) {
       MAT.outline.color.setScalar(1 - 0.75 * n);
       MAT.rimStrength.value = 0.30 * (1 - 0.85 * n);
