@@ -12,7 +12,8 @@ export type SimFn = (dt: number, tick: number) => void;
 export type RenderFn = (alpha: number, dt: number) => void;
 
 const FIXED_DT = 1 / 60;
-const MAX_SUBSTEPS = 4;
+// perf: 4 catch-up steps caused a spiral (slow frame -> more sim -> slower frame)
+const MAX_SUBSTEPS = 2;
 const MAX_FRAME_DT = 0.1;
 
 export class Loop {
