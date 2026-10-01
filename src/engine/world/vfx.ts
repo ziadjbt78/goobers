@@ -101,10 +101,10 @@ export class Vfx {
       this.dummy.scale.set(rad, 1, rad);
       this.dummy.updateMatrix();
       this.ringsMesh.setMatrixAt(ri, this.dummy.matrix);
-      const fade = 1 - u;
-      this.col.copy(r.c).multiplyScalar(1.6);
+      // additive blend: scaling colour toward black IS the fade-out
+      const fade = (1 - u) * (1 - u);
+      this.col.copy(r.c).multiplyScalar(0.55 * fade);
       this.ringsMesh.setColorAt(ri, this.col);
-      void fade;
       ri++;
     }
     for (let i = ri; i < RING_CAP; i++) {
@@ -135,7 +135,7 @@ export class Vfx {
       this.dummy.scale.set(s, s, s);
       this.dummy.updateMatrix();
       this.puffsMesh.setMatrixAt(pi, this.dummy.matrix);
-      this.col.copy(p.c).multiplyScalar(1.5);
+      this.col.copy(p.c).multiplyScalar(0.6 * (1 - u));
       this.puffsMesh.setColorAt(pi, this.col);
       pi++;
     }
