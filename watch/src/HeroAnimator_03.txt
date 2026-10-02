@@ -1,250 +1,250 @@
-  751|   crouchD = 0;
-  752|   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
-  753| 
-  754|   solveWorldLegs(dt: number, free: boolean): void {
-  755|     if (!this.external || this.legs.length === 0) return;
-  756|     void this._wrapPi;
-  757|     const restQ = this._restQ ?? (this._restQ = this.legs.map((L) => [L.knee.quaternion.clone(), L.ankle.quaternion.clone()]));
-  758|     this.legsFree = free;
-  759|     if (free) {
-  760|       // v15: hanging legs EASE, never snap. Hips keep the motion layer's pose
-  761|       // (dangle flail), knees/ankles relax toward rest at the swing rate, and the
-  762|       // crouch stays applied (decaying) so the body cannot pop up.
-  763|       const hf = this.handle;
-  764|       this.crouch *= Math.exp(-dt / 0.2);
-  765|       if (this.crouch > 1e-5) {
-  766|         const root = hf.bones[0];
-  767|         const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
-  768|         root.position.y -= this.crouch / Math.max(1e-4, ps);
-  769|       }
-  770|       const maxF = LEG_RATE * dt;
-  771|       for (let li = 0; li < this.legs.length; li++) {
-  772|         const L = this.legs[li];
-  773|         L.relaunch = true; L.mode = 'plant'; L.err = 0; L.postErr = 0;
-  774|         L.knee.quaternion.copy(restQ[li][0]);
-  775|         L.ankle.quaternion.copy(restQ[li][1]);
-  776|         this._limitLeg(L, maxF);
-  777|       }
-  778|       return;
-  779|     }
-  780|     const h = this.handle;
-  781|     h.bones[0].updateWorldMatrix(true, true); // v18: skeleton only, not every mesh
-  782| 
-  783|     // v13 CROUCH: stubby legs plus the cartoon bob put the hips higher than the
-  784|     // legs can reach, so a planted foot had zero horizontal room and HAD to slide.
-  785|     // Drop the skeleton root just enough that every hip sits inside its leg.
-  786|     const ground = this.drive.groundY;
-  787|     const kH = 0.92 - 0.12 * Math.min(1, Math.max(0, this.locomotionW));
-  788|     let need = 0;
-  789|     for (const L of this.legs) {
-  790|       // v19: matrices are fresh from the skeleton update above; no per-call chain refresh
-  791|       const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
-  792|       const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
-  793|       const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
-  794|       L.reachW = hip.distanceTo(knee) + knee.distanceTo(ank);
-  795|       this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(h.group.matrixWorld);
-  796|       const gy = (ground ? ground(this._rw.x, this._rw.z) : h.group.position.y) + L.plant.y;
-  797|       need = Math.max(need, Math.min(0.5 * L.reachW, hip.y - gy - kH * L.reachW));
-  798|     }
-  799|     const c0 = this.crouch;
-  800|     // v18: the crouch EASES down fast instead of snapping; an instant root drop popped every planted knee
-  801|     this.crouch += (need - this.crouch) * Math.min(1, dt / (need > this.crouch ? 0.06 : 0.25));
-  802|     this.crouchD = Math.abs(this.crouch - c0);
-  803|     if (this.crouch > 1e-5) {
-  804|       const root = h.bones[0];
-  805|       const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
-  806|       root.position.y -= this.crouch / Math.max(1e-4, ps);
-  807|       root.updateWorldMatrix(false, true);
-  808|     }
-  809| 
-  810|     const gq = h.group.getWorldQuaternion(this._q);
-  811|     for (const L of this.legs) {
-  812|       // v15: the pole rides the hip's PARENT (the body), so an action that pitches
-  813|       // or rolls the body carries the knee direction with it instead of flipping it
-  814|       const par = L.hip.parent;
-  815|       if (par) {
-  816|         par.getWorldQuaternion(this._pq);
-  817|         if (!L.parRel) L.parRel = gq.clone().invert().multiply(this._pq);
-  818|         this._pq.multiply(this._iq.copy(L.parRel).invert());
-  819|         this._pole.copy(L.poleLocal).applyQuaternion(this._pq);
-  820|       } else {
-  821|         this._pole.copy(L.poleLocal).applyQuaternion(gq);
-  822|       }
-  823|       if (L.poleSm.lengthSq() < 1e-6) L.poleSm.copy(this._pole);
-  824|       else L.poleSm.lerp(this._pole, 1 - Math.exp(-dt / 0.08)).normalize();
-  825|       this._pole.copy(L.poleSm);
-  826|       if (L.relaunch) {
-  827|         // v15: back from hanging: swing in from where the ankle REALLY is
-  828|         L.relaunch = false;
-  829|         if (L.init) {
-  830|           L.ankle.getWorldPosition(this._aw);
-  831|           L.mode = 'swing'; L.swingT = 0; L.swingDur = 0.18; L.forced = true;
-  832|           L.swingFrom.copy(this._aw); L.swingTo.copy(this._aw);
-  833|         }
-  834|       }
-  835|       this._worldFootTarget(L, this._ft, dt);
-  836|       const hip = this._hw2.setFromMatrixPosition(L.hip.matrixWorld);
-  837|       const rMax = 0.985 * L.reachW;
-  838|       // v16: a planted foot the body has risen away from lifts STRAIGHT UP on its
-  839|       // lock (keeps x/z) instead of being dragged sideways toward the hip
-  840|       L.lifted = false;
-  841|       this._lk.copy(this._ft);
-  842|       if (L.mode === 'plant' && !L.landPending) {
-  843|         const dxz = Math.hypot(this._ft.x - hip.x, this._ft.z - hip.z);
-  844|         if (dxz < rMax) {
-  845|           const minY = hip.y - Math.sqrt(rMax * rMax - dxz * dxz);
-  846|           if (this._ft.y < minY) { L.lifted = minY - this._ft.y > 0.01; this._ft.y = minY; }
-  847|         }
-  848|       }
-  849|       this._softReach(this._ft, hip, L.reachW);
-  850|       // v17: clamped along hip->lock = raised off the ground, not sliding on it
-  851|       if (L.mode === 'plant' && !L.landPending && this._ft.distanceTo(this._lk) > 0.01) L.lifted = true;
-  852|       this._goal.copy(this._ft);
-  853|       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
-  854|       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
-  855|       const LX = L as unknown as { fb: boolean; bendRate: number; bendPrev: number };
-  856|       LX.fb = false;
-  857|       let err = 0;
-  858|       for (let it = 0; it < 3; it++) {
-  859|         // v19 EXACT solve: in the hip parent's own (squashed) space, no world-frame twist, feet face the heading
-  860|         if (solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal, exact: true, footWorld: gq })) LX.fb = true;
-  861|         L.hip.updateWorldMatrix(false, true);
-  862|         this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
-  863|         const ex = this._goal.x - this._aw.x, ey = this._goal.y - this._aw.y, ez = this._goal.z - this._aw.z;
-  864|         err = Math.hypot(ex, ey, ez);
-  865|         if (err < 0.0015) break;
-  866|         this._ft.x += ex; this._ft.y += ey; this._ft.z += ez;
-  867|         this._clampReach(this._ft, hip, 0.995 * L.reachW);
-  868|       }
-  869|       L.err = err;
-  870|       if (L.mode === 'plant' && !L.landPending && err > this.liftStats.maxErr) this.liftStats.maxErr = err;
-  871|       const maxD = (L.mode === 'swing' || L.landPending ? LEG_RATE : PLANT_RATE) * dt;
-  872|       for (let k = 0; k < 3; k++) {
-  873|         const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
-  874|         const q = L.prev[k];
-  875|         const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
-  876|         if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
-  877|       }
-  878|       L.hip.updateWorldMatrix(false, true);
-  879|       L.postErr = this._aw.setFromMatrixPosition(L.ankle.matrixWorld).distanceTo(this._goal);
-  880|       // v19 forensics: knee BEND rate (what the eye sees); quaternion rate minus this is twist
-  881|       {
-  882|         this._b1.setFromMatrixPosition(L.knee.matrixWorld);
-  883|         this._b2.copy(this._aw).sub(this._b1);
-  884|         this._b1.sub(hip);
-  885|         const den = this._b1.length() * this._b2.length();
-  886|         const bend = den > 1e-9 ? Math.acos(THREE.MathUtils.clamp(this._b1.dot(this._b2) / den, -1, 1)) : 0;
-  887|         LX.bendRate = LX.bendPrev >= 0 && dt > 0 ? Math.abs(bend - LX.bendPrev) / dt : 0;
-  888|         LX.bendPrev = bend;
-  889|       }
-  890|       L.prev[0].copy(L.hip.quaternion);
-  891|       L.prev[1].copy(L.knee.quaternion);
-  892|       L.prev[2].copy(L.ankle.quaternion);
-  893|       if (L.landPending) { L.lock.setFromMatrixPosition(L.ankle.matrixWorld); L.landPending = false; }
-  894|     }
-  895|     if (this.petted) {
-  896|       const back = this.legs[this.legs.length - 1];
-  897|       const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
-  898|       if (kick > 0.02) back.hip.rotateX(-kick);
-  899|     }
-  900|   }
-  901| 
-  902|   /** v18 soft IK: below SOFT_START the target is untouched; beyond it the reach approaches
-  903|    *  SOFT_TOP asymptotically, so a near-straight knee eases instead of snapping. */
-  904|   private _softReach(v: THREE.Vector3, hip: THREE.Vector3, reach: number): void {
-  905|     if (reach <= 1e-4) return;
-  906|     const d = v.distanceTo(hip);
-  907|     const ds = SOFT_START * reach;
-  908|     if (d <= ds) return;
-  909|     const s = (SOFT_TOP - SOFT_START) * reach;
-  910|     const d2 = ds + s * (1 - Math.exp(-(d - ds) / s));
-  911|     v.sub(hip).multiplyScalar(d2 / d).add(hip);
-  912|   }
-  913| 
-  914|   private _clampReach(v: THREE.Vector3, hip: THREE.Vector3, r: number): void {
-  915|     if (r <= 1e-4) return;
-  916|     const d = v.distanceTo(hip);
-  917|     if (d > r) v.sub(hip).multiplyScalar(r / d).add(hip);
-  918|   }
-  919| 
-  920|   private _hw2 = new THREE.Vector3();
-  921|   private _b1 = new THREE.Vector3();
-  922|   private _b2 = new THREE.Vector3();
-  923|   private _goal = new THREE.Vector3();
-  924|   private _lk = new THREE.Vector3();
-  925|   private _sc = new THREE.Vector3();
-  926| 
-  927|   /**
-  928|    * v12 world stepper. Leg geometry is measured LIVE in world space (creature
-  929|    * scale and squash included). Lifts are edge-triggered on the gait beat; a
-  930|    * swing re-aims every frame at where the foot must land so the coming stance
-  931|    * is centred under the hip; guards lift early only when the leg truly runs
-  932|    * out of reach, with an airborne-count limit so a creature never lifts every
-  933|    * foot at once.
-  934|    */
-  935|   private _worldFootTarget(L: LegRig, out: THREE.Vector3, dt: number): void {
-  936|     const g = this.handle.group;
-  937|     const gp = g.position;
-  938|     const hd = this.drive.heading;
-  939|     const fx = Math.sin(hd), fz = Math.cos(hd);
-  940|     const speed = this.drive.speed;
-  941|     const moving = speed > 0.05;
-  942|     const stride = Math.max(0.05, this.drive.stride);
-  943|     const ground = this.drive.groundY;
-  944|     const gy = (x: number, z: number): number => (ground ? ground(x, z) : gp.y) + L.plant.y;
-  945| 
-  946|     const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
-  947|     const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
-  948|     const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
-  949|     const reach = Math.max(1e-3, hip.distanceTo(knee) + knee.distanceTo(ank));
-  950|     const rest = this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(g.matrixWorld);
-  951|     rest.y = gy(rest.x, rest.z);
-  952| 
-  953|     if (!L.init) {
-  954|       L.lock.copy(rest); L.mode = 'plant'; L.landT = 1;
-  955|       L.prevU = (this.externalPhase + L.phase) % 1;
-  956|       L.init = true;
-  957|     }
-  958| 
-  959|     const dyHip = Math.max(0, hip.y - rest.y);
-  960|     const r92 = 0.92 * reach;
-  961|     const restFlat = Math.hypot(rest.x - hip.x, rest.z - hip.z);
-  962|     const flat = Math.max(0.25 * reach, 1.3 * restFlat, Math.sqrt(Math.max(0, r92 * r92 - dyHip * dyHip)));
-  963|     const hardR = Math.max(0.97 * reach, 1.08 * hip.distanceTo(rest));
-  964|     const cycle = moving ? stride / speed : 1.2;
-  965|     const half = Math.min(0.5 * DUTY * stride, 0.6 * flat);
+  751|   legsFree = false;
+  752|   liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 };
+  753|   /** v18: |crouch change| this frame, for joint forensics */
+  754|   crouchD = 0;
+  755|   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
+  756| 
+  757|   solveWorldLegs(dt: number, free: boolean): void {
+  758|     if (!this.external || this.legs.length === 0) return;
+  759|     void this._wrapPi;
+  760|     const restQ = this._restQ ?? (this._restQ = this.legs.map((L) => [L.knee.quaternion.clone(), L.ankle.quaternion.clone()]));
+  761|     this.legsFree = free;
+  762|     if (free) {
+  763|       // v15: hanging legs EASE, never snap. Hips keep the motion layer's pose
+  764|       // (dangle flail), knees/ankles relax toward rest at the swing rate, and the
+  765|       // crouch stays applied (decaying) so the body cannot pop up.
+  766|       const hf = this.handle;
+  767|       this.crouch *= Math.exp(-dt / 0.2);
+  768|       if (this.crouch > 1e-5) {
+  769|         const root = hf.bones[0];
+  770|         const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
+  771|         root.position.y -= this.crouch / Math.max(1e-4, ps);
+  772|       }
+  773|       const maxF = LEG_RATE * dt;
+  774|       for (let li = 0; li < this.legs.length; li++) {
+  775|         const L = this.legs[li];
+  776|         L.relaunch = true; L.mode = 'plant'; L.err = 0; L.postErr = 0;
+  777|         (L as unknown as { tPrev?: THREE.Vector3 }).tPrev = undefined;
+  778|         L.knee.quaternion.copy(restQ[li][0]);
+  779|         L.ankle.quaternion.copy(restQ[li][1]);
+  780|         this._limitLeg(L, maxF);
+  781|       }
+  782|       return;
+  783|     }
+  784|     const h = this.handle;
+  785|     h.bones[0].updateWorldMatrix(true, true); // v18: skeleton only, not every mesh
+  786| 
+  787|     // v13 CROUCH: stubby legs plus the cartoon bob put the hips higher than the
+  788|     // legs can reach, so a planted foot had zero horizontal room and HAD to slide.
+  789|     // Drop the skeleton root just enough that every hip sits inside its leg.
+  790|     const ground = this.drive.groundY;
+  791|     const kH = 0.92 - 0.12 * Math.min(1, Math.max(0, this.locomotionW));
+  792|     let need = 0;
+  793|     for (const L of this.legs) {
+  794|       // v19: matrices are fresh from the skeleton update above; no per-call chain refresh
+  795|       const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
+  796|       const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
+  797|       const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
+  798|       L.reachW = hip.distanceTo(knee) + knee.distanceTo(ank);
+  799|       this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(h.group.matrixWorld);
+  800|       const gy = (ground ? ground(this._rw.x, this._rw.z) : h.group.position.y) + L.plant.y;
+  801|       need = Math.max(need, Math.min(0.5 * L.reachW, hip.y - gy - kH * L.reachW));
+  802|     }
+  803|     const c0 = this.crouch;
+  804|     // v18: the crouch EASES down fast instead of snapping; an instant root drop popped every planted knee
+  805|     this.crouch += (need - this.crouch) * Math.min(1, dt / (need > this.crouch ? 0.06 : 0.25));
+  806|     this.crouchD = Math.abs(this.crouch - c0);
+  807|     if (this.crouch > 1e-5) {
+  808|       const root = h.bones[0];
+  809|       const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
+  810|       root.position.y -= this.crouch / Math.max(1e-4, ps);
+  811|       root.updateWorldMatrix(false, true);
+  812|     }
+  813| 
+  814|     const gq = h.group.getWorldQuaternion(this._q);
+  815|     for (const L of this.legs) {
+  816|       // v15: the pole rides the hip's PARENT (the body), so an action that pitches
+  817|       // or rolls the body carries the knee direction with it instead of flipping it
+  818|       const par = L.hip.parent;
+  819|       if (par) {
+  820|         par.getWorldQuaternion(this._pq);
+  821|         if (!L.parRel) L.parRel = gq.clone().invert().multiply(this._pq);
+  822|         this._pq.multiply(this._iq.copy(L.parRel).invert());
+  823|         this._pole.copy(L.poleLocal).applyQuaternion(this._pq);
+  824|       } else {
+  825|         this._pole.copy(L.poleLocal).applyQuaternion(gq);
+  826|       }
+  827|       if (L.poleSm.lengthSq() < 1e-6) L.poleSm.copy(this._pole);
+  828|       else L.poleSm.lerp(this._pole, 1 - Math.exp(-dt / 0.08)).normalize();
+  829|       this._pole.copy(L.poleSm);
+  830|       if (L.relaunch) {
+  831|         // v15: back from hanging: swing in from where the ankle REALLY is
+  832|         L.relaunch = false;
+  833|         if (L.init) {
+  834|           L.ankle.getWorldPosition(this._aw);
+  835|           L.mode = 'swing'; L.swingT = 0; L.swingDur = 0.18; L.forced = true;
+  836|           L.swingFrom.copy(this._aw); L.swingTo.copy(this._aw);
+  837|         }
+  838|       }
+  839|       this._worldFootTarget(L, this._ft, dt);
+  840|       const hip = this._hw2.setFromMatrixPosition(L.hip.matrixWorld);
+  841|       const rMax = 0.985 * L.reachW;
+  842|       // v16: a planted foot the body has risen away from lifts STRAIGHT UP on its
+  843|       // lock (keeps x/z) instead of being dragged sideways toward the hip
+  844|       L.lifted = false;
+  845|       this._lk.copy(this._ft);
+  846|       if (L.mode === 'plant' && !L.landPending) {
+  847|         const dxz = Math.hypot(this._ft.x - hip.x, this._ft.z - hip.z);
+  848|         if (dxz < rMax) {
+  849|           const minY = hip.y - Math.sqrt(rMax * rMax - dxz * dxz);
+  850|           if (this._ft.y < minY) { L.lifted = minY - this._ft.y > 0.01; this._ft.y = minY; }
+  851|         }
+  852|       }
+  853|       this._softReach(this._ft, hip, L.reachW);
+  854|       // v17: clamped along hip->lock = raised off the ground, not sliding on it
+  855|       if (L.mode === 'plant' && !L.landPending && this._ft.distanceTo(this._lk) > 0.01) L.lifted = true;
+  856|       // v20 TASK-SPACE LIMIT: the foot target moves at most FOOT_RATE leg-lengths per second.
+  857|       // The IK stays exact, so the rendered foot IS the target: smooth AND no slip.
+  858|       {
+  859|         const LT = L as unknown as { tPrev?: THREE.Vector3 };
+  860|         if (!LT.tPrev) LT.tPrev = this._ft.clone();
+  861|         else {
+  862|           const mv = this._ft.distanceTo(LT.tPrev);
+  863|           const cap = FOOT_RATE * Math.max(1e-3, L.reachW) * dt;
+  864|           if (mv > cap && mv > 1e-6) this._ft.sub(LT.tPrev).multiplyScalar(cap / mv).add(LT.tPrev);
+  865|           LT.tPrev.copy(this._ft);
+  866|         }
+  867|       }
+  868|       this._goal.copy(this._ft);
+  869|       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
+  870|       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
+  871|       const LX = L as unknown as { fb: boolean; sw: boolean; bendRate: number; bendPrev: number };
+  872|       LX.fb = false; LX.sw = false;
+  873|       // v20: knee swivel is limited against the knee of the PREVIOUS FRAME (body space)
+  874|       this._kp.copy(L.kneeLocal);
+  875|       let err = 0;
+  876|       for (let it = 0; it < 3; it++) {
+  877|         // v19 EXACT solve: in the hip parent's own (squashed) space, no world-frame twist, feet face the heading
+  878|         if (solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal, exact: true, footWorld: gq, swivelFrom: this._kp, maxSwivel: SWIVEL_RATE * dt })) LX.fb = true;
+  879|         if (legLast.swivel) LX.sw = true;
+  880|         L.hip.updateWorldMatrix(false, true);
+  881|         this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
+  882|         const ex = this._goal.x - this._aw.x, ey = this._goal.y - this._aw.y, ez = this._goal.z - this._aw.z;
+  883|         err = Math.hypot(ex, ey, ez);
+  884|         if (err < 0.0015) break;
+  885|         this._ft.x += ex; this._ft.y += ey; this._ft.z += ez;
+  886|         this._clampReach(this._ft, hip, 0.995 * L.reachW);
+  887|       }
+  888|       L.err = err;
+  889|       if (L.mode === 'plant' && !L.landPending && err > this.liftStats.maxErr) this.liftStats.maxErr = err;
+  890|       // v20: bone-space limiter is a SAFETY NET only (it dragged planted feet: post-limiter slip)
+  891|       const maxD = 1.5 * PLANT_RATE * dt;
+  892|       for (let k = 0; k < 3; k++) {
+  893|         const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
+  894|         const q = L.prev[k];
+  895|         const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
+  896|         if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
+  897|       }
+  898|       L.hip.updateWorldMatrix(false, true);
+  899|       L.postErr = this._aw.setFromMatrixPosition(L.ankle.matrixWorld).distanceTo(this._goal);
+  900|       // v19 forensics: knee BEND rate (what the eye sees); quaternion rate minus this is twist
+  901|       {
+  902|         this._b1.setFromMatrixPosition(L.knee.matrixWorld);
+  903|         this._b2.copy(this._aw).sub(this._b1);
+  904|         this._b1.sub(hip);
+  905|         const den = this._b1.length() * this._b2.length();
+  906|         const bend = den > 1e-9 ? Math.acos(THREE.MathUtils.clamp(this._b1.dot(this._b2) / den, -1, 1)) : 0;
+  907|         LX.bendRate = LX.bendPrev >= 0 && dt > 0 ? Math.abs(bend - LX.bendPrev) / dt : 0;
+  908|         LX.bendPrev = bend;
+  909|       }
+  910|       L.prev[0].copy(L.hip.quaternion);
+  911|       L.prev[1].copy(L.knee.quaternion);
+  912|       L.prev[2].copy(L.ankle.quaternion);
+  913|       if (L.landPending) { L.lock.setFromMatrixPosition(L.ankle.matrixWorld); L.landPending = false; }
+  914|     }
+  915|     if (this.petted) {
+  916|       const back = this.legs[this.legs.length - 1];
+  917|       const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
+  918|       if (kick > 0.02) back.hip.rotateX(-kick);
+  919|     }
+  920|   }
+  921| 
+  922|   /** v18 soft IK: below SOFT_START the target is untouched; beyond it the reach approaches
+  923|    *  SOFT_TOP asymptotically, so a near-straight knee eases instead of snapping. */
+  924|   private _softReach(v: THREE.Vector3, hip: THREE.Vector3, reach: number): void {
+  925|     if (reach <= 1e-4) return;
+  926|     const d = v.distanceTo(hip);
+  927|     const ds = SOFT_START * reach;
+  928|     if (d <= ds) return;
+  929|     const s = (SOFT_TOP - SOFT_START) * reach;
+  930|     const d2 = ds + s * (1 - Math.exp(-(d - ds) / s));
+  931|     v.sub(hip).multiplyScalar(d2 / d).add(hip);
+  932|   }
+  933| 
+  934|   private _clampReach(v: THREE.Vector3, hip: THREE.Vector3, r: number): void {
+  935|     if (r <= 1e-4) return;
+  936|     const d = v.distanceTo(hip);
+  937|     if (d > r) v.sub(hip).multiplyScalar(r / d).add(hip);
+  938|   }
+  939| 
+  940|   private _hw2 = new THREE.Vector3();
+  941|   private _b1 = new THREE.Vector3();
+  942|   private _b2 = new THREE.Vector3();
+  943|   private _kp = new THREE.Vector3();
+  944|   private _goal = new THREE.Vector3();
+  945|   private _lk = new THREE.Vector3();
+  946|   private _sc = new THREE.Vector3();
+  947| 
+  948|   /**
+  949|    * v12 world stepper. Leg geometry is measured LIVE in world space (creature
+  950|    * scale and squash included). Lifts are edge-triggered on the gait beat; a
+  951|    * swing re-aims every frame at where the foot must land so the coming stance
+  952|    * is centred under the hip; guards lift early only when the leg truly runs
+  953|    * out of reach, with an airborne-count limit so a creature never lifts every
+  954|    * foot at once.
+  955|    */
+  956|   private _worldFootTarget(L: LegRig, out: THREE.Vector3, dt: number): void {
+  957|     const g = this.handle.group;
+  958|     const gp = g.position;
+  959|     const hd = this.drive.heading;
+  960|     const fx = Math.sin(hd), fz = Math.cos(hd);
+  961|     const speed = this.drive.speed;
+  962|     const moving = speed > 0.05;
+  963|     const stride = Math.max(0.05, this.drive.stride);
+  964|     const ground = this.drive.groundY;
+  965|     const gy = (x: number, z: number): number => (ground ? ground(x, z) : gp.y) + L.plant.y;
   966| 
-  967|     const u = (this.externalPhase + L.phase) % 1;
-  968|     const onBeat = moving && crossedPhase(L.prevU, u, DUTY);
-  969|     L.prevU = u;
-  970|     L.landT += dt;
-  971| 
-  972|     // landing point: half a stance AHEAD of where the body will be at touchdown,
-  973|     // clamped inside the leg's reach from where the hip will be
-  974|     const plan = (remaining: number, o: THREE.Vector3): THREE.Vector3 => {
-  975|       const travel = moving ? speed * remaining : 0;
-  976|       const ahead = moving ? travel + half : 0;
-  977|       o.set(rest.x + fx * ahead, 0, rest.z + fz * ahead);
-  978|       const hx = hip.x + fx * travel, hz = hip.z + fz * travel;
-  979|       const vx = o.x - hx, vz = o.z - hz;
-  980|       const vd = Math.hypot(vx, vz), lim = 0.85 * flat;
-  981|       if (vd > lim) { o.x = hx + (vx / vd) * lim; o.z = hz + (vz / vd) * lim; }
-  982|       o.y = gy(o.x, o.z);
-  983|       return o;
-  984|     };
-  985| 
-  986|     if (L.mode === 'plant') {
-  987|       // v13: a planted foot the solver cannot hold steps instead of sliding
-  988|       const strained = L.err > 0.01 && L.landT > 0.05;
-  989|       const hard = strained || Math.hypot(L.lock.x - hip.x, L.lock.z - hip.z) > flat || hip.distanceTo(L.lock) > hardR;
-  990|       const rx = L.lock.x - rest.x, rz = L.lock.z - rest.z;
-  991|       const along = rx * fx + rz * fz;
-  992|       const lagging = moving && along < -1.35 * half;
-  993|       const drifted = !moving && Math.hypot(rx, rz) > Math.max(0.3 * flat, 0.05 * reach);
-  994|       let air = 0;
-  995|       for (const o of this.legs) if (o !== L && o.mode === 'swing') air++;
-  996|       const maxAir = this.legs.length >= 6 ? 3 : this.legs.length >= 4 ? 2 : 1;
-  997|       const beat = onBeat && L.landT > 0.2 * cycle;
-  998|       const soft = (lagging || drifted) && air < maxAir && L.landT > 0.08;
-  999|       if (hard || beat || soft) {
- 1000|         const ls = this.liftStats;
+  967|     const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
+  968|     const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
+  969|     const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
+  970|     const reach = Math.max(1e-3, hip.distanceTo(knee) + knee.distanceTo(ank));
+  971|     const rest = this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(g.matrixWorld);
+  972|     rest.y = gy(rest.x, rest.z);
+  973| 
+  974|     if (!L.init) {
+  975|       L.lock.copy(rest); L.mode = 'plant'; L.landT = 1;
+  976|       L.prevU = (this.externalPhase + L.phase) % 1;
+  977|       L.init = true;
+  978|     }
+  979| 
+  980|     const dyHip = Math.max(0, hip.y - rest.y);
+  981|     const r92 = 0.92 * reach;
+  982|     const restFlat = Math.hypot(rest.x - hip.x, rest.z - hip.z);
+  983|     const flat = Math.max(0.25 * reach, 1.3 * restFlat, Math.sqrt(Math.max(0, r92 * r92 - dyHip * dyHip)));
+  984|     const hardR = Math.max(0.97 * reach, 1.08 * hip.distanceTo(rest));
+  985|     const cycle = moving ? stride / speed : 1.2;
+  986|     const half = Math.min(0.5 * DUTY * stride, 0.6 * flat);
+  987| 
+  988|     const u = (this.externalPhase + L.phase) % 1;
+  989|     const onBeat = moving && crossedPhase(L.prevU, u, DUTY);
+  990|     L.prevU = u;
+  991|     L.landT += dt;
+  992| 
+  993|     // landing point: half a stance AHEAD of where the body will be at touchdown,
+  994|     // clamped inside the leg's reach from where the hip will be
+  995|     const plan = (remaining: number, o: THREE.Vector3): THREE.Vector3 => {
+  996|       const travel = moving ? speed * remaining : 0;
+  997|       const ahead = moving ? travel + half : 0;
+  998|       o.set(rest.x + fx * ahead, 0, rest.z + fz * ahead);
+  999|       const hx = hip.x + fx * travel, hz = hip.z + fz * travel;
+ 1000|       const vx = o.x - hx, vz = o.z - hz;

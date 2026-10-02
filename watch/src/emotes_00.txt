@@ -1,0 +1,205 @@
+    1| /**
+    2|  * Floating emote icons. One atlas texture, one instanced quad per glyph —
+    3|  * adding a glyph costs nothing, and the whole system is a few draw calls.
+    4|  *
+    5|  * Emotes scale UP with camera distance so they stay readable when the island is
+    6|  * viewed from far away, and the billboard is rebuilt from the camera quaternion
+    7|  * every frame so it always faces the viewer.
+    8|  */
+    9| import * as THREE from 'three';
+   10| import { MAT } from './materials';
+   11| 
+   12| export type Glyph = 'heart' | 'bang' | 'question' | 'zzz' | 'note' | 'star' | 'sweat';
+   13| export const GLYPHS: Glyph[] = ['heart', 'bang', 'question', 'zzz', 'note', 'star', 'sweat'];
+   14| 
+   15| const TILE = 64;
+   16| const COLS = GLYPHS.length;
+   17| 
+   18| function drawGlyph(ctx: CanvasRenderingContext2D, glyph: Glyph, cx: number, cy: number, s: number): void {
+   19|   ctx.save();
+   20|   ctx.translate(cx, cy);
+   21|   ctx.scale(s, s);
+   22|   ctx.lineJoin = 'round';
+   23|   ctx.lineCap = 'round';
+   24|   ctx.strokeStyle = 'rgba(28,20,40,0.92)';
+   25|   ctx.lineWidth = 7;
+   26|   const stroke = (draw: () => void): void => { ctx.stroke(); draw(); };
+   27|   switch (glyph) {
+   28|     case 'heart': {
+   29|       ctx.beginPath();
+   30|       ctx.moveTo(0, 16);
+   31|       ctx.bezierCurveTo(-22, -2, -14, -22, 0, -10);
+   32|       ctx.bezierCurveTo(14, -22, 22, -2, 0, 16);
+   33|       ctx.closePath();
+   34|       ctx.fillStyle = '#ff5d7e';
+   35|       stroke(() => { ctx.fill(); });
+   36|       break;
+   37|     }
+   38|     case 'bang': {
+   39|       ctx.beginPath();
+   40|       ctx.moveTo(-5, -22); ctx.lineTo(5, -22); ctx.lineTo(3, 4); ctx.lineTo(-3, 4);
+   41|       ctx.closePath();
+   42|       ctx.fillStyle = '#ffd34d';
+   43|       stroke(() => { ctx.fill(); });
+   44|       ctx.beginPath();
+   45|       ctx.arc(0, 15, 5, 0, Math.PI * 2);
+   46|       ctx.fillStyle = '#ffd34d';
+   47|       stroke(() => { ctx.fill(); });
+   48|       break;
+   49|     }
+   50|     case 'question': {
+   51|       ctx.font = 'bold 46px ui-rounded, system-ui, sans-serif';
+   52|       ctx.textAlign = 'center';
+   53|       ctx.textBaseline = 'middle';
+   54|       ctx.fillStyle = '#8ad4ff';
+   55|       ctx.lineWidth = 8;
+   56|       ctx.strokeText('?', 0, 2);
+   57|       ctx.fillText('?', 0, 2);
+   58|       break;
+   59|     }
+   60|     case 'zzz': {
+   61|       ctx.font = 'bold 30px ui-rounded, system-ui, sans-serif';
+   62|       ctx.textAlign = 'center';
+   63|       ctx.textBaseline = 'middle';
+   64|       ctx.fillStyle = '#ffffff';
+   65|       ctx.lineWidth = 6;
+   66|       ctx.strokeText('z', -9, 8);
+   67|       ctx.fillText('z', -9, 8);
+   68|       ctx.font = 'bold 40px ui-rounded, system-ui, sans-serif';
+   69|       ctx.strokeText('z', 9, -6);
+   70|       ctx.fillText('z', 9, -6);
+   71|       break;
+   72|     }
+   73|     case 'star': {
+   74|       ctx.beginPath();
+   75|       for (let i = 0; i < 10; i++) {
+   76|         const a = (i / 10) * Math.PI * 2 - Math.PI / 2;
+   77|         const r = i % 2 === 0 ? 22 : 9;
+   78|         const px = Math.cos(a) * r;
+   79|         const py = Math.sin(a) * r;
+   80|         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+   81|       }
+   82|       ctx.closePath();
+   83|       ctx.fillStyle = '#ffe680';
+   84|       stroke(() => { ctx.fill(); });
+   85|       break;
+   86|     }
+   87|     case 'sweat': {
+   88|       ctx.beginPath();
+   89|       ctx.moveTo(0, -22);
+   90|       ctx.bezierCurveTo(13, -6, 13, 10, 0, 16);
+   91|       ctx.bezierCurveTo(-13, 10, -13, -6, 0, -22);
+   92|       ctx.closePath();
+   93|       ctx.fillStyle = '#8fd8ff';
+   94|       stroke(() => { ctx.fill(); });
+   95|       break;
+   96|     }
+   97|     default: {
+   98|       ctx.font = 'bold 48px ui-rounded, system-ui, sans-serif';
+   99|       ctx.textAlign = 'center';
+  100|       ctx.textBaseline = 'middle';
+  101|       ctx.fillStyle = '#ffa8e0';
+  102|       ctx.lineWidth = 7;
+  103|       ctx.strokeText('\u266a', 0, 2);
+  104|       ctx.fillText('\u266a', 0, 2);
+  105|       break;
+  106|     }
+  107|   }
+  108|   ctx.restore();
+  109| }
+  110| 
+  111| function buildAtlas(): THREE.Texture {
+  112|   const cv = document.createElement('canvas');
+  113|   cv.width = TILE * COLS;
+  114|   cv.height = TILE;
+  115|   const ctx = cv.getContext('2d') as CanvasRenderingContext2D;
+  116|   ctx.clearRect(0, 0, cv.width, cv.height);
+  117|   GLYPHS.forEach((g, i) => drawGlyph(ctx, g, i * TILE + TILE / 2, TILE / 2, 1.0));
+  118|   const tex = new THREE.CanvasTexture(cv);
+  119|   tex.minFilter = THREE.LinearFilter;
+  120|   tex.magFilter = THREE.LinearFilter;
+  121|   tex.colorSpace = THREE.SRGBColorSpace;
+  122|   return tex;
+  123| }
+  124| 
+  125| export interface EmoteRequest {
+  126|   glyph: Glyph;
+  127|   pos: THREE.Vector3;
+  128|   /** 0..1 through the emote's life */
+  129|   life: number;
+  130|   /** optional size multiplier, for a creature that screams rather than mutters */
+  131|   punch?: number;
+  132| }
+  133| 
+  134| const CAP = 32;
+  135| /** Emotes grow with distance so a far-away "!" still reads as a "!". */
+  136| const NEAR = 7;
+  137| const FAR = 34;
+  138| const GROW = 2.5;
+  139| 
+  140| export class Emotes {
+  141|   readonly group = new THREE.Group();
+  142|   private meshes = new Map<Glyph, THREE.InstancedMesh>();
+  143|   private dummy = new THREE.Object3D();
+  144|   private tmp = new THREE.Vector3();
+  145|   private camPos = new THREE.Vector3();
+  146| 
+  147|   constructor() {
+  148|     const tex = buildAtlas();
+  149|     MAT.emote.map = tex;
+  150|     MAT.emote.needsUpdate = true;
+  151|     const plane = new THREE.PlaneGeometry(1, 1);
+  152|     GLYPHS.forEach((g, i) => {
+  153|       const geo = plane.clone();
+  154|       const uv = geo.getAttribute('uv') as THREE.BufferAttribute;
+  155|       const u0 = i / COLS;
+  156|       for (let v = 0; v < uv.count; v++) uv.setX(v, u0 + uv.getX(v) / COLS);
+  157|       uv.needsUpdate = true;
+  158|       const mesh = new THREE.InstancedMesh(geo, MAT.emote, CAP);
+  159|       mesh.name = `emote_${g}`;
+  160|       mesh.frustumCulled = false;
+  161|       mesh.renderOrder = 5;
+  162|       this.group.add(mesh);
+  163|       this.meshes.set(g, mesh);
+  164|     });
+  165|   }
+  166| 
+  167|   /** Requests are consumed each frame; anything not asked for is hidden. */
+  168|   render(list: EmoteRequest[], camera: THREE.Camera): void {
+  169|     const counts = new Map<Glyph, number>();
+  170|     const q = camera.quaternion;
+  171|     camera.getWorldPosition(this.camPos);
+  172|     for (const req of list) {
+  173|       const mesh = this.meshes.get(req.glyph);
+  174|       if (!mesh) continue;
+  175|       const n = counts.get(req.glyph) ?? 0;
+  176|       if (n >= CAP) continue;
+  177|       const t = req.life;
+  178|       const rise = t * 0.55;
+  179|       const pop = t < 0.18 ? t / 0.18 : 1;
+  180|       const dist = this.tmp.copy(req.pos).distanceTo(this.camPos);
+  181|       const zoom = 1 + Math.min(1, Math.max(0, (dist - NEAR) / (FAR - NEAR))) * (GROW - 1);
+  182|       const s = 0.34 * pop * (0.9 + 0.1 * Math.sin(t * 14)) * zoom * (req.punch ?? 1);
+  183|       this.tmp.copy(req.pos);
+  184|       this.tmp.y += 0.30 + rise;
+  185|       this.dummy.position.copy(this.tmp);
+  186|       this.dummy.quaternion.copy(q);
+  187|       this.dummy.scale.set(s, s, s);
+  188|       this.dummy.updateMatrix();
+  189|       mesh.setMatrixAt(n, this.dummy.matrix);
+  190|       counts.set(req.glyph, n + 1);
+  191|     }
+  192|     for (const [g, mesh] of this.meshes) {
+  193|       const used = counts.get(g) ?? 0;
+  194|       for (let i = used; i < CAP; i++) {
+  195|         this.dummy.position.set(0, -999, 0);
+  196|         this.dummy.quaternion.identity();
+  197|         this.dummy.scale.set(0.0001, 0.0001, 0.0001);
+  198|         this.dummy.updateMatrix();
+  199|         mesh.setMatrixAt(i, this.dummy.matrix);
+  200|       }
+  201|       mesh.count = CAP;
+  202|       mesh.instanceMatrix.needsUpdate = true;
+  203|     }
+  204|   }
+  205| }

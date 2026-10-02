@@ -1,0 +1,250 @@
+    1| /**
+    2|  * HeroRenderer — template → GPU. One merged skinned mesh for the whole body,
+    3|  * one shared geometry for the inverted-hull outline (with a darker colour
+    4|  * attribute), and one face rig whose parts are children of the head bone.
+    5|  *
+    6|  * Skinning is rigid: every vertex is welded 1.0 to its own bone. Limbs never
+    7|  * deform, never stretch, and never slide out of their socket, because the
+    8|  * socket is the bone origin and the rounded end of the limb is a sphere centred
+    9|  * exactly there.
+   10|  */
+   11| import * as THREE from 'three';
+   12| import type { HeroTemplate, HeroPartDef } from '../../hero/types';
+   13| import { hexToLinear, mixRgb } from '../../hero/palette';
+   14| import { sphere, torusArc } from '../../hero/geometry';
+   15| import { MAT } from './materials';
+   16| 
+   17| export interface EyeHandles {
+   18|   root: THREE.Group;
+   19|   socket: THREE.Group;
+   20|   sclera: THREE.Mesh;
+   21|   iris: THREE.Mesh;
+   22|   pupil: THREE.Mesh;
+   23|   big: THREE.Mesh;
+   24|   small: THREE.Mesh;
+   25|   lidPivot: THREE.Group;
+   26|   lid: THREE.Mesh;
+   27|   brow: THREE.Mesh;
+   28|   /** v8 Face map: a mirrored lower lid that rises up to 40% of the eye height */
+   29|   lidLowerPivot: THREE.Group;
+   30|   lidLower: THREE.Mesh;
+   31|   /** v8 eyeMode symbols, all code-built, all hidden until an eyeMode asks */
+   32|   arcHappy: THREE.Mesh;
+   33|   arcClosed: THREE.Mesh;
+   34|   heart: THREE.Mesh;
+   35|   star: THREE.Mesh;
+   36|   spiral: THREE.Mesh;
+   37|   radius: number;
+   38|   side: number;
+   39| }
+   40| 
+   41| export interface HeroHandle {
+   42|   group: THREE.Group;
+   43|   /** v8: ground-contact group between the root and the rig — the motion layer
+   44|    *  writes lift, volume-preserving squash, grow and roll-over here. Identity
+   45|    *  by default, so every pedestal view renders exactly as it did before. */
+   46|   pivot: THREE.Group;
+   47|   bones: THREE.Bone[];
+   48|   boneByName: Map<string, THREE.Bone>;
+   49|   boneIndex: Map<string, number>;
+   50|   skeleton: THREE.Skeleton;
+   51|   shell: THREE.SkinnedMesh;
+   52|   outline: THREE.SkinnedMesh;
+   53|   eyes: EyeHandles[];
+   54|   mouth: THREE.Mesh;
+   55|   mouthOpen: THREE.Mesh;
+   56|   blush: THREE.Mesh[];
+   57|   /** authored head-local blush centres, so the Face map can puff them outward */
+   58|   blushRest: THREE.Vector3[];
+   59|   parts: HeroPartDef[];
+   60|   height: number;
+   61|   radius: number;
+   62|   verts: number;
+   63|   tris: number;
+   64|   colorAt(name: string): [number, number, number];
+   65|   dispose(): void;
+   66| }
+   67| 
+   68| function paint(geo: THREE.BufferGeometry, c: [number, number, number]): void {
+   69|   const n = geo.getAttribute('position').count;
+   70|   const col = new Float32Array(n * 3);
+   71|   for (let i = 0; i < n; i++) { col[i * 3] = c[0]; col[i * 3 + 1] = c[1]; col[i * 3 + 2] = c[2]; }
+   72|   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+   73| }
+   74| 
+   75| /** Five-point star, drawn as a Shape so no image file is ever needed. */
+   76| function starShape(rr: number): THREE.BufferGeometry {
+   77|   const s = new THREE.Shape();
+   78|   for (let i = 0; i < 10; i++) {
+   79|     const a = (i / 10) * Math.PI * 2 - Math.PI * 0.5;
+   80|     const rad = i % 2 === 0 ? rr : rr * 0.46;
+   81|     const x = Math.cos(a) * rad;
+   82|     const y = Math.sin(a) * rad;
+   83|     if (i === 0) s.moveTo(x, y);
+   84|     else s.lineTo(x, y);
+   85|   }
+   86|   s.closePath();
+   87|   return new THREE.ShapeGeometry(s, 10);
+   88| }
+   89| 
+   90| /** Two-lobe heart, again pure geometry. */
+   91| function heartShape(rr: number): THREE.BufferGeometry {
+   92|   const s = new THREE.Shape();
+   93|   s.moveTo(0, -rr * 0.92);
+   94|   s.bezierCurveTo(rr * 1.18, -rr * 0.10, rr * 0.64, rr * 1.06, 0, rr * 0.34);
+   95|   s.bezierCurveTo(-rr * 0.64, rr * 1.06, -rr * 1.18, -rr * 0.10, 0, -rr * 0.92);
+   96|   return new THREE.ShapeGeometry(s, 14);
+   97| }
+   98| 
+   99| /** Dizzy spiral: a two-and-a-half turn band with a tapered tail. */
+  100| function spiralShape(rr: number): THREE.BufferGeometry {
+  101|   const s = new THREE.Shape();
+  102|   const turns = 2.5;
+  103|   const N = 96;
+  104|   const inner = rr * 0.14;
+  105|   for (let i = 0; i <= N; i++) {
+  106|     const k = i / N;
+  107|     const a = k * turns * Math.PI * 2;
+  108|     const rad = inner + (rr - inner) * k;
+  109|     const x = Math.cos(a) * rad;
+  110|     const y = Math.sin(a) * rad;
+  111|     if (i === 0) s.moveTo(x, y);
+  112|     else s.lineTo(x, y);
+  113|   }
+  114|   for (let i = N; i >= 0; i--) {
+  115|     const k = i / N;
+  116|     const a = k * turns * Math.PI * 2;
+  117|     const rad = inner + (rr - inner) * k - rr * 0.12 * (0.35 + 0.65 * k);
+  118|     s.lineTo(Math.cos(a) * rad, Math.sin(a) * rad);
+  119|   }
+  120|   s.closePath();
+  121|   return new THREE.ShapeGeometry(s, 8);
+  122| }
+  123| 
+  124| const _p = new THREE.Vector3();
+  125| const _n = new THREE.Vector3();
+  126| const _nm = new THREE.Matrix3();
+  127| const _id = new THREE.Matrix4();
+  128| const _partM = new THREE.Matrix4();
+  129| 
+  130| export function buildHero(t: HeroTemplate, palette: { base: string; belly: string; limb: string; accent: string; deep: string }): HeroHandle {
+  131|   const accent = hexToLinear(palette.accent);
+  132|   const deep = hexToLinear(palette.deep);
+  133| 
+  134|   // ---- bones ---------------------------------------------------------------
+  135|   const bones: THREE.Bone[] = [];
+  136|   for (const b of t.bones) {
+  137|     const bone = new THREE.Bone();
+  138|     bone.name = b.name;
+  139|     bone.position.copy(b.pos);
+  140|     bone.quaternion.copy(b.quat);
+  141|     bones.push(bone);
+  142|   }
+  143|   for (let i = 0; i < t.bones.length; i++) {
+  144|     const p = t.bones[i].parent;
+  145|     if (p >= 0) bones[p].add(bones[i]);
+  146|   }
+  147|   const boneByName = new Map<string, THREE.Bone>();
+  148|   const boneIndex = new Map<string, number>();
+  149|   for (let i = 0; i < bones.length; i++) { boneByName.set(bones[i].name, bones[i]); boneIndex.set(bones[i].name, i); }
+  150| 
+  151|   const group = new THREE.Group();
+  152|   // v8: group -> pivot -> bones[0]. The pivot sits at ground-contact height and
+  153|   // carries lift / squash / grow / roll-over; `root` keeps its authored offsets.
+  154|   const pivot = new THREE.Group();
+  155|   pivot.name = 'pivot';
+  156|   group.add(pivot);
+  157|   pivot.add(bones[0]);
+  158|   group.updateMatrixWorld(true);
+  159| 
+  160|   // Creature-space rest position of every bone. Face parts are authored in
+  161|   // creature space (the template says where the eyes sit on the body), so they
+  162|   // must be re-expressed in the HEAD BONE's local space before parenting, or
+  163|   // every eye and mouth floats up by the head's own offset.
+  164|   const boneAt: THREE.Vector3[] = [];
+  165|   for (let i = 0; i < t.bones.length; i++) {
+  166|     const p = t.bones[i].parent >= 0 ? boneAt[t.bones[i].parent] : new THREE.Vector3();
+  167|     boneAt.push(t.bones[i].pos.clone().add(p));
+  168|   }
+  169|   const headAt = boneAt[t.headBone];
+  170| 
+  171|   // ---- merge every part into one rigidly-skinned buffer --------------------
+  172|   let vTotal = 0;
+  173|   for (const part of t.parts) vTotal += part.geo.getAttribute('position').count;
+  174| 
+  175|   const positions = new Float32Array(vTotal * 3);
+  176|   const normals = new Float32Array(vTotal * 3);
+  177|   const colors = new Float32Array(vTotal * 3);
+  178|   const ocolors = new Float32Array(vTotal * 3);
+  179|   const skinIndex = new Uint16Array(vTotal * 4);
+  180|   const skinWeight = new Float32Array(vTotal * 4);
+  181|   const indices: number[] = [];
+  182|   const colorMap = new Map<string, [number, number, number]>();
+  183| 
+  184|   let vo = 0;
+  185|   for (const part of t.parts) {
+  186|     const pos = part.geo.getAttribute('position');
+  187|     const nrm = part.geo.getAttribute('normal');
+  188|     const idx = part.geo.getIndex();
+  189|     // Skinning treats a vertex as a REST-WORLD (creature-space) point: the
+  190|     // shader computes boneMatrix * boneInverse * vertex, and boneInverse maps
+  191|     // world -> bone-local. Template part matrices are bone-local, so push each
+  192|     // part into creature space here or every part lands one bone-height low.
+  193|     const bone = boneAt[part.bone];
+  194|     _partM.makeTranslation(bone.x, bone.y, bone.z).multiply(part.matrix);
+  195|     _nm.getNormalMatrix(_partM);
+  196|     const base0 = vo;
+  197|     colorMap.set(part.name, part.color);
+  198|     const oc = mixRgb(part.color, deep, part.outlineDark);
+  199|     for (let i = 0; i < pos.count; i++) {
+  200|       _p.set(pos.getX(i), pos.getY(i), pos.getZ(i)).applyMatrix4(_partM);
+  201|       _n.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i)).applyMatrix3(_nm).normalize();
+  202|       positions[vo * 3] = _p.x; positions[vo * 3 + 1] = _p.y; positions[vo * 3 + 2] = _p.z;
+  203|       normals[vo * 3] = _n.x; normals[vo * 3 + 1] = _n.y; normals[vo * 3 + 2] = _n.z;
+  204|       // subtle top-light lift so the flat authored colours still read as volume
+  205|       const lift = Math.max(0, _n.y) * 0.06;
+  206|       colors[vo * 3] = Math.min(1, part.color[0] + lift);
+  207|       colors[vo * 3 + 1] = Math.min(1, part.color[1] + lift);
+  208|       colors[vo * 3 + 2] = Math.min(1, part.color[2] + lift);
+  209|       ocolors[vo * 3] = oc[0]; ocolors[vo * 3 + 1] = oc[1]; ocolors[vo * 3 + 2] = oc[2];
+  210|       skinIndex[vo * 4] = part.bone;
+  211|       skinIndex[vo * 4 + 1] = 0;
+  212|       skinIndex[vo * 4 + 2] = 0;
+  213|       skinIndex[vo * 4 + 3] = 0;
+  214|       skinWeight[vo * 4] = 1;
+  215|       skinWeight[vo * 4 + 1] = 0;
+  216|       skinWeight[vo * 4 + 2] = 0;
+  217|       skinWeight[vo * 4 + 3] = 0;
+  218|       vo++;
+  219|     }
+  220|     if (idx) for (let i = 0; i < idx.count; i++) indices.push(base0 + idx.getX(i));
+  221|     else for (let i = 0; i < pos.count; i++) indices.push(base0 + i);
+  222|     part.geo.dispose();
+  223|   }
+  224| 
+  225|   const geo = new THREE.BufferGeometry();
+  226|   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  227|   geo.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  228|   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  229|   geo.setAttribute('skinIndex', new THREE.BufferAttribute(skinIndex, 4));
+  230|   geo.setAttribute('skinWeight', new THREE.BufferAttribute(skinWeight, 4));
+  231|   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+  232|   geo.computeBoundingSphere();
+  233|   geo.computeBoundingBox();
+  234| 
+  235|   const ogeo = new THREE.BufferGeometry();
+  236|   ogeo.setAttribute('position', geo.getAttribute('position'));
+  237|   ogeo.setAttribute('normal', geo.getAttribute('normal'));
+  238|   ogeo.setAttribute('skinIndex', geo.getAttribute('skinIndex'));
+  239|   ogeo.setAttribute('skinWeight', geo.getAttribute('skinWeight'));
+  240|   ogeo.setAttribute('color', new THREE.BufferAttribute(ocolors, 3));
+  241|   ogeo.setIndex(geo.getIndex());
+  242|   ogeo.boundingSphere = geo.boundingSphere;
+  243|   ogeo.boundingBox = geo.boundingBox;
+  244| 
+  245|   // Bind against the REST pose explicitly. Skeleton() reads whatever
+  246|   // matrixWorld the bones happen to carry at construction time, and a stale
+  247|   // matrix there makes every skinned vertex land at the wrong height while the
+  248|   // face meshes (plain children of the bones) still look right. No bone has a
+  249|   // rest rotation, so the rest world matrix is exactly T(boneAt[i]).
+  250|   const skeleton = new THREE.Skeleton(bones);

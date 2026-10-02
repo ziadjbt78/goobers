@@ -1,0 +1,250 @@
+    1| /**
+    2|  * Everything on the island that is not a creature: the pond, grass, flowers,
+    3|  * berry bushes that actually run out and come back, rocks, logs and the ball.
+    4|  * Grass, flowers and berries are instanced, so the whole meadow is a handful of
+    5|  * draw calls no matter how much of it there is.
+    6|  *
+    7|  * Scale rules (creatures are the stars):
+    8|  *   rocks  no taller than ~0.8 x a creature
+    9|  *   bushes no taller than ~0.6 x a creature
+   10|  *   grass  60% shorter and 50% thinner than it used to be, and trampled flat
+   11|  *          in a 1.5-unit circle around every creature so legs stay visible
+   12|  */
+   13| import * as THREE from 'three';
+   14| import { MAT } from '../render/hero/materials';
+   15| import { heightAt, isDry, normalAt, POND, WATER_Y, WALK_R } from './terrain';
+   16| 
+   17| export interface Bush {
+   18|   pos: THREE.Vector3;
+   19|   /** seconds until this berry comes back; 0 while it is on the bush */
+   20|   ripe: number[];
+   21|   slot: number[];
+   22|   /** set when the bush is shaken, so it can wobble */
+   23|   shake: number;
+   24| }
+   25| 
+   26| export interface Rock { pos: THREE.Vector3; radius: number }
+   27| 
+   28| function mulberry(seed: number): () => number {
+   29|   let a = seed >>> 0;
+   30|   return () => {
+   31|     a = (a + 0x6d2b79f5) >>> 0;
+   32|     let t = a;
+   33|     t = Math.imul(t ^ (t >>> 15), t | 1);
+   34|     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+   35|     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+   36|   };
+   37| }
+   38| 
+   39| /** Half of what it was: the meadow no longer hides the creatures. */
+   40| const GRASS_N = 2600;
+   41| const FLOWER_N = 260;
+   42| const BERRIES_PER_BUSH = 7;
+   43| /** No grass inside this radius of a creature's feet. */
+   44| const TRAMPLE_R = 1.5;
+   45| 
+   46| export class Props {
+   47|   readonly group = new THREE.Group();
+   48|   readonly bushes: Bush[] = [];
+   49|   readonly rocks: Rock[] = [];
+   50|   readonly logs: { pos: THREE.Vector3; dir: THREE.Vector3; len: number; radius: number }[] = [];
+   51|   readonly ball = { pos: new THREE.Vector3(-2.2, 0.4, 2.6), vel: new THREE.Vector3(), radius: 0.30, spin: 0 };
+   52|   readonly ballMesh: THREE.Mesh;
+   53|   private berryMesh!: THREE.InstancedMesh;
+   54|   private berrySlots: { bush: number; berry: number; pos: THREE.Vector3 }[] = [];
+   55|   private grass!: THREE.InstancedMesh;
+   56|   private grassBase: { x: number; y: number; z: number; rot: number; sx: number; sy: number }[] = [];
+   57|   private grassHidden: boolean[] = [];
+   58|   private trampleDirty = true;
+   59|   private bushMeshes: THREE.Mesh[] = [];
+   60|   private dummy = new THREE.Object3D();
+   61|   private tmpN = new THREE.Vector3();
+   62| 
+   63|   constructor() {
+   64|     const rng = mulberry(0x9e3779b9);
+   65|     this.group.add(this.buildPond());
+   66|     this.buildGrass(rng);
+   67|     this.buildFlowers(rng);
+   68|     this.buildRocks(rng);
+   69|     this.buildLogs(rng);
+   70|     this.buildBushes(rng);
+   71| 
+   72|     // ---- the ball ---------------------------------------------------------
+   73|     const bg = new THREE.SphereGeometry(this.ball.radius, 28, 20);
+   74|     const bc = new Float32Array(bg.getAttribute('position').count * 3);
+   75|     const base = new THREE.Color('#f2f6ff');
+   76|     const stripe = new THREE.Color('#e8543f');
+   77|     const p = bg.getAttribute('position') as THREE.BufferAttribute;
+   78|     for (let i = 0; i < p.count; i++) {
+   79|       const t = Math.abs(p.getY(i) / this.ball.radius);
+   80|       const c = t < 0.32 ? stripe : base;
+   81|       bc[i * 3] = c.r; bc[i * 3 + 1] = c.g; bc[i * 3 + 2] = c.b;
+   82|     }
+   83|     bg.setAttribute('color', new THREE.BufferAttribute(bc, 3));
+   84|     this.ball.pos.y = heightAt(this.ball.pos.x, this.ball.pos.z) + this.ball.radius;
+   85|     this.ballMesh = new THREE.Mesh(bg, MAT.lit);
+   86|     this.ballMesh.name = 'ball';
+   87|     this.group.add(this.ballMesh);
+   88|   }
+   89| 
+   90|   /** The pond: a water disc trimmed exactly to the waterline, with a foam lip. */
+   91|   private buildPond(): THREE.Group {
+   92|     const g = new THREE.Group();
+   93|     g.name = 'pondGroup';
+   94|     let waterR = POND.r * 0.5;
+   95|     for (let i = 0; i <= 120; i++) {
+   96|       const r = (i / 120) * POND.r * 1.1;
+   97|       if (heightAt(POND.x + r, POND.z) < WATER_Y) waterR = r;
+   98|     }
+   99|     const geo = new THREE.CircleGeometry(waterR, 56);
+  100|     geo.rotateX(-Math.PI / 2);
+  101|     const p = geo.getAttribute('position') as THREE.BufferAttribute;
+  102|     const col = new Float32Array(p.count * 3);
+  103|     const deep = new THREE.Color('#2f8fc8');
+  104|     const shallow = new THREE.Color('#9fe6e0');
+  105|     const c = new THREE.Color();
+  106|     for (let i = 0; i < p.count; i++) {
+  107|       const r = Math.hypot(p.getX(i), p.getZ(i)) / Math.max(0.01, waterR);
+  108|       c.copy(deep).lerp(shallow, r * r);
+  109|       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  110|     }
+  111|     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  112|     const mesh = new THREE.Mesh(geo, MAT.lit);
+  113|     mesh.position.set(POND.x, WATER_Y + 0.006, POND.z);
+  114|     mesh.name = 'pond';
+  115|     g.add(mesh);
+  116| 
+  117|     // a soft white lip so the pond edge reads against the grass
+  118|     const lip = new THREE.RingGeometry(waterR * 0.93, waterR + 0.10, 56, 1);
+  119|     lip.rotateX(-Math.PI / 2);
+  120|     const lp = lip.getAttribute('position') as THREE.BufferAttribute;
+  121|     const lcol = new Float32Array(lp.count * 3);
+  122|     const white = new THREE.Color('#ffffff');
+  123|     const soft = new THREE.Color('#cdeef0');
+  124|     for (let i = 0; i < lp.count; i++) {
+  125|       const r = Math.hypot(lp.getX(i), lp.getZ(i));
+  126|       c.copy(soft).lerp(white, Math.min(1, Math.max(0, (r - waterR * 0.93) / (waterR * 0.12))));
+  127|       lcol[i * 3] = c.r; lcol[i * 3 + 1] = c.g; lcol[i * 3 + 2] = c.b;
+  128|     }
+  129|     lip.setAttribute('color', new THREE.BufferAttribute(lcol, 3));
+  130|     const lipMesh = new THREE.Mesh(lip, MAT.lit);
+  131|     lipMesh.position.set(POND.x, WATER_Y + 0.018, POND.z);
+  132|     g.add(lipMesh);
+  133|     return g;
+  134|   }
+  135| 
+  136|   /**
+  137|    * A single blade, swelled at the base. 60% shorter and thinner than v6 — the
+  138|    * creatures must read as the tallest thing on the meadow.
+  139|    */
+  140|   private bladeGeo(): THREE.BufferGeometry {
+  141|     const g = new THREE.BufferGeometry();
+  142|     const w = 0.021;
+  143|     const h = 0.165;
+  144|     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
+  145|       -w, 0, 0, w, 0, 0, w * 0.55, h * 0.55, 0, -w * 0.55, h * 0.55, 0, 0, h, 0,
+  146|     ]), 3));
+  147|     g.setIndex([0, 1, 2, 0, 2, 3, 3, 2, 4]);
+  148|     g.setAttribute('aSway', new THREE.BufferAttribute(new Float32Array([0, 0, 0.3, 0.3, 1]), 1));
+  149|     const col = new Float32Array(5 * 3);
+  150|     const lo = new THREE.Color('#5aa63f');
+  151|     const hi = new THREE.Color('#a8e070');
+  152|     const c = new THREE.Color();
+  153|     for (let i = 0; i < 5; i++) {
+  154|       c.copy(lo).lerp(hi, i / 4);
+  155|       col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  156|     }
+  157|     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  158|     g.computeVertexNormals();
+  159|     return g;
+  160|   }
+  161| 
+  162|   private buildGrass(rng: () => number): void {
+  163|     this.grass = new THREE.InstancedMesh(this.bladeGeo(), MAT.foliage, GRASS_N);
+  164|     this.grass.name = 'grass';
+  165|     this.grass.frustumCulled = false;
+  166|     const col = new THREE.Color();
+  167|     let n = 0;
+  168|     for (let i = 0; i < GRASS_N * 6 && n < GRASS_N; i++) {
+  169|       const a = rng() * Math.PI * 2;
+  170|       const rr = Math.sqrt(rng()) * WALK_R * 1.04;
+  171|       const x = Math.cos(a) * rr;
+  172|       const z = Math.sin(a) * rr;
+  173|       if (!isDry(x, z)) continue;
+  174|       const y = heightAt(x, z);
+  175|       const rot = rng() * Math.PI;
+  176|       const sx = 0.55 + rng() * 0.5;
+  177|       const sy = sx * (0.55 + rng() * 0.5);
+  178|       this.grassBase.push({ x, y, z, rot, sx, sy });
+  179|       this.grassHidden.push(false);
+  180|       this.dummy.position.set(x, y - 0.015, z);
+  181|       this.dummy.rotation.set(0, rot, 0);
+  182|       this.dummy.scale.set(sx, sy, sx);
+  183|       this.dummy.updateMatrix();
+  184|       this.grass.setMatrixAt(n, this.dummy.matrix);
+  185|       col.setHSL(0.26 + rng() * 0.06, 0.42 + rng() * 0.22, 0.72 + rng() * 0.22);
+  186|       this.grass.setColorAt(n, col);
+  187|       n++;
+  188|     }
+  189|     this.grass.count = n;
+  190|     if (this.grass.instanceColor) this.grass.instanceColor.needsUpdate = true;
+  191|     this.group.add(this.grass);
+  192|   }
+  193| 
+  194|   /**
+  195|    * Flatten every blade inside TRAMPLE_R of a creature's feet. Cheap enough to
+  196|    * run at a few Hz: it only rewrites the instances that changed state.
+  197|    */
+  198|   trample(points: { x: number; z: number }[]): void {
+  199|     if (!points.length) return;
+  200|     let changed = false;
+  201|     for (let i = 0; i < this.grassBase.length; i++) {
+  202|       const b = this.grassBase[i];
+  203|       let near = false;
+  204|       for (const p of points) {
+  205|         const dx = b.x - p.x;
+  206|         const dz = b.z - p.z;
+  207|         if (dx * dx + dz * dz < TRAMPLE_R * TRAMPLE_R) { near = true; break; }
+  208|       }
+  209|       if (near !== this.grassHidden[i]) {
+  210|         this.grassHidden[i] = near;
+  211|         const s = near ? 0.12 : 1;
+  212|         this.dummy.position.set(b.x, b.y - 0.015, b.z);
+  213|         this.dummy.rotation.set(0, b.rot, 0);
+  214|         this.dummy.scale.set(b.sx * s, b.sy * s, b.sx * s);
+  215|         this.dummy.updateMatrix();
+  216|         this.grass.setMatrixAt(i, this.dummy.matrix);
+  217|         changed = true;
+  218|       }
+  219|     }
+  220|     if (changed) this.grass.instanceMatrix.needsUpdate = true;
+  221|   }
+  222| 
+  223|   private buildFlowers(rng: () => number): void {
+  224|     const g = new THREE.CircleGeometry(0.062, 7);
+  225|     const pet = new THREE.Color('#ffffff');
+  226|     const col = new Float32Array(g.getAttribute('position').count * 3);
+  227|     for (let i = 0; i < col.length; i += 3) { col[i] = pet.r; col[i + 1] = pet.g; col[i + 2] = pet.b; }
+  228|     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  229|     g.setAttribute('aSway', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count).fill(0.25), 1));
+  230|     const mesh = new THREE.InstancedMesh(g, MAT.foliage, FLOWER_N);
+  231|     mesh.name = 'flowers';
+  232|     mesh.frustumCulled = false;
+  233|     const hue = ['#fff2a8', '#ff9ec4', '#c9a8ff', '#ffffff', '#ffce6a'];
+  234|     const c = new THREE.Color();
+  235|     let n = 0;
+  236|     for (let i = 0; i < FLOWER_N * 6 && n < FLOWER_N; i++) {
+  237|       const a = rng() * Math.PI * 2;
+  238|       const rr = Math.sqrt(rng()) * WALK_R * 0.98;
+  239|       const x = Math.cos(a) * rr;
+  240|       const z = Math.sin(a) * rr;
+  241|       if (!isDry(x, z)) continue;
+  242|       this.dummy.position.set(x, heightAt(x, z) + 0.075 + rng() * 0.06, z);
+  243|       this.dummy.rotation.set(-Math.PI * 0.42, rng() * Math.PI * 2, 0);
+  244|       const s = 0.70 + rng() * 0.6;
+  245|       this.dummy.scale.set(s, s, s);
+  246|       this.dummy.updateMatrix();
+  247|       mesh.setMatrixAt(n, this.dummy.matrix);
+  248|       c.set(hue[Math.floor(rng() * hue.length) % hue.length]).multiplyScalar(1.35);
+  249|       mesh.setColorAt(n, c);
+  250|       n++;

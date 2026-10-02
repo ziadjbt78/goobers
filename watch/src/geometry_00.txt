@@ -1,0 +1,151 @@
+    1| /**
+    2|  * Smooth / creased geometry factories.
+    3|  *
+    4|  * Two rules decide everything here:
+    5|  *  - round solids (sphere, egg, capsule, cone) get WELDED SMOOTH normals, so no
+    6|  *    facet is ever visible no matter how the light hits them;
+    7|  *  - flat-faced solids (rounded box, hex prism) get creased normals, so the flat
+    8|  *    faces stay flat and only the bevel blends. That is the "geometric" read.
+    9|  */
+   10| import * as THREE from 'three';
+   11| import { mergeVertices, toCreasedNormals } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+   12| import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+   13| 
+   14| /** Weld coincident vertices and rebuild normals: the cure for visible facets. */
+   15| export function smooth(geo: THREE.BufferGeometry): THREE.BufferGeometry {
+   16|   const g = mergeVertices(geo, 1e-5);
+   17|   g.computeVertexNormals();
+   18|   if (geo !== g) geo.dispose();
+   19|   return g;
+   20| }
+   21| 
+   22| /** Smooth the bevel, keep the flat faces flat. */
+   23| export function creased(geo: THREE.BufferGeometry, angle = Math.PI / 3): THREE.BufferGeometry {
+   24|   const g = toCreasedNormals(geo, angle);
+   25|   if (geo !== g) geo.dispose();
+   26|   return g;
+   27| }
+   28| 
+   29| /** Uniform or non-uniform sphere. */
+   30| export function sphere(rx: number, ry = rx, rz = rx, radial = 32, heightSeg = 24): THREE.BufferGeometry {
+   31|   const g = new THREE.SphereGeometry(1, Math.max(8, radial), Math.max(6, heightSeg));
+   32|   g.scale(Math.max(1e-4, rx), Math.max(1e-4, ry), Math.max(1e-4, rz));
+   33|   return smooth(g);
+   34| }
+   35| 
+   36| /**
+   37|  * Egg / bean. `taper` narrows the top, which is what makes a body read as a
+   38|  * body instead of a ball. 0 = sphere, 0.25 = a clear egg.
+   39|  */
+   40| export function egg(rx: number, ry: number, rz: number, taper = 0.14, radial = 40, heightSeg = 28): THREE.BufferGeometry {
+   41|   const g = new THREE.SphereGeometry(1, Math.max(8, radial), Math.max(6, heightSeg));
+   42|   const p = g.getAttribute('position') as THREE.BufferAttribute;
+   43|   for (let i = 0; i < p.count; i++) {
+   44|     const y = p.getY(i);
+   45|     const t = (y + 1) * 0.5;
+   46|     const s = 1 - taper * t * t;
+   47|     p.setXYZ(i, p.getX(i) * s, y, p.getZ(i) * s);
+   48|   }
+   49|   g.scale(Math.max(1e-4, rx), Math.max(1e-4, ry), Math.max(1e-4, rz));
+   50|   return smooth(g);
+   51| }
+   52| 
+   53| /**
+   54|  * A segment of a limb: a tapered capsule with hemispherical caps of radius r1 at
+   55|  * the FAR end and r2 at the PIVOT end. Two consecutive segments sharing a radius
+   56|  * produce two coincident spheres at the joint, which is why the limb can rotate
+   57|  * freely with no gap and no bulge.
+   58|  */
+   59| export function limbSegment(rFar: number, rPivot: number, len: number, radial = 32, capSeg = 8): THREE.BufferGeometry {
+   60|   const half = Math.max(1e-3, len * 0.5);
+   61|   const a = Math.max(1e-4, rFar);
+   62|   const b = Math.max(1e-4, rPivot);
+   63|   const cs = Math.max(3, capSeg);
+   64|   const pts: THREE.Vector2[] = [];
+   65|   for (let i = 0; i <= cs; i++) {
+   66|     const ang = -Math.PI * 0.5 + (Math.PI * 0.5 * i) / cs;
+   67|     pts.push(new THREE.Vector2(Math.cos(ang) * a, -half + Math.sin(ang) * a));
+   68|   }
+   69|   pts.push(new THREE.Vector2((a + b) * 0.5, 0));
+   70|   for (let i = 0; i <= cs; i++) {
+   71|     const ang = (Math.PI * 0.5 * i) / cs;
+   72|     pts.push(new THREE.Vector2(Math.cos(ang) * b, half + Math.sin(ang) * b));
+   73|   }
+   74|   return smooth(new THREE.LatheGeometry(pts, Math.max(10, radial)));
+   75| }
+   76| 
+   77| /** Rounded box. `bevel` is an absolute radius, clamped to 49% of the smallest side. */
+   78| export function roundedBox(w: number, h: number, d: number, bevel: number, seg = 5): THREE.BufferGeometry {
+   79|   const m = Math.min(w, h, d);
+   80|   const b = Math.max(0.002, Math.min(bevel, m * 0.49));
+   81|   return creased(new RoundedBoxGeometry(Math.max(0.01, w), Math.max(0.01, h), Math.max(0.01, d), Math.max(3, seg), b), Math.PI / 3);
+   82| }
+   83| 
+   84| /** Rounded cone — ears, horns, sprout tips. */
+   85| export function roundCone(rBase: number, rTip: number, h: number, radial = 28): THREE.BufferGeometry {
+   86|   const half = Math.max(1e-3, h * 0.5);
+   87|   const a = Math.max(1e-4, rBase);
+   88|   const b = Math.max(1e-4, rTip);
+   89|   const cs = 6;
+   90|   const pts: THREE.Vector2[] = [];
+   91|   for (let i = 0; i <= cs; i++) {
+   92|     const ang = -Math.PI * 0.5 + (Math.PI * 0.5 * i) / cs;
+   93|     pts.push(new THREE.Vector2(Math.cos(ang) * a, -half + Math.sin(ang) * a));
+   94|   }
+   95|   pts.push(new THREE.Vector2((a + b) * 0.5, 0));
+   96|   for (let i = 0; i <= cs; i++) {
+   97|     const ang = (Math.PI * 0.5 * i) / cs;
+   98|     pts.push(new THREE.Vector2(Math.cos(ang) * b, half + Math.sin(ang) * b));
+   99|   }
+  100|   return smooth(new THREE.LatheGeometry(pts, Math.max(10, radial)));
+  101| }
+  102| 
+  103| /** Beveled prism. `sides = 6` gives the bug abdomen. */
+  104| export function bevelPrism(radius: number, h: number, sides: number, bevel: number, bevelSeg = 4): THREE.BufferGeometry {
+  105|   const b = Math.max(0.002, Math.min(bevel, Math.min(radius, h * 0.5) * 0.49));
+  106|   const r = Math.max(0.01, radius - b);
+  107|   const hh = Math.max(0.01, h * 0.5 - b);
+  108|   const n = Math.max(3, Math.round(sides));
+  109|   const pts: THREE.Vector2[] = [];
+  110|   pts.push(new THREE.Vector2(0, -hh - b));
+  111|   for (let i = 0; i <= bevelSeg; i++) {
+  112|     const ang = -Math.PI * 0.5 + (Math.PI * 0.5 * i) / bevelSeg;
+  113|     pts.push(new THREE.Vector2(r + Math.cos(ang) * b, -hh + Math.sin(ang) * b));
+  114|   }
+  115|   for (let i = 0; i <= bevelSeg; i++) {
+  116|     const ang = (Math.PI * 0.5 * i) / bevelSeg;
+  117|     pts.push(new THREE.Vector2(r + Math.cos(ang) * b, hh + Math.sin(ang) * b));
+  118|   }
+  119|   pts.push(new THREE.Vector2(0, hh + b));
+  120|   return creased(new THREE.LatheGeometry(pts, n), Math.PI / 6);
+  121| }
+  122| 
+  123| /** Torus arc — mouths, collars. */
+  124| export function torusArc(R: number, r: number, arc: number, radial = 24, tubular = 10): THREE.BufferGeometry {
+  125|   return smooth(new THREE.TorusGeometry(Math.max(1e-3, R), Math.max(1e-3, r), Math.max(4, tubular), Math.max(6, radial), arc));
+  126| }
+  127| 
+  128| /** Flattened lens — blush and face patches. */
+  129| export function lens(rx: number, ry: number, depth: number, radial = 24, heightSeg = 12): THREE.BufferGeometry {
+  130|   return sphere(rx, ry, depth, radial, heightSeg);
+  131| }
+  132| 
+  133| /** Unit quaternion from one direction to another. */
+  134| export function quatFromTo(from: THREE.Vector3, to: THREE.Vector3): THREE.Quaternion {
+  135|   return new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), to.clone().normalize());
+  136| }
+  137| 
+  138| /**
+  139|  * Distance from the centre of an ellipsoid to its surface along a unit
+  140|  * direction. Used to plant eyes exactly on a head, never floating off it.
+  141|  */
+  142| export function ellipsoidSurfaceDist(a: number, b: number, c: number, dx: number, dy: number, dz: number): number {
+  143|   const k = (dx / a) ** 2 + (dy / b) ** 2 + (dz / c) ** 2;
+  144|   return 1 / Math.sqrt(Math.max(1e-9, k));
+  145| }
+  146| 
+  147| /** Analytic direction on an ellipsoid: yaw around Y, pitch around X. */
+  148| export function dirFromYawPitch(yaw: number, pitch: number): THREE.Vector3 {
+  149|   const cp = Math.cos(pitch);
+  150|   return new THREE.Vector3(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp).normalize();
+  151| }

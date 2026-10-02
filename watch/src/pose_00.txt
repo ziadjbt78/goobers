@@ -10,171 +10,211 @@
    10|  *
    11|  * v19 EXACT path (World): the whole solve runs in the hip parent's OWN space,
    12|  * squash included, and every aim is a minimal arc from the bone's rest
-   13|  * direction. That removes the world-frame twist (heading-dependent flips on
-   14|  * splayed legs, phantom knee rates) and the squash-shear ankle miss. The
-   15|  * legacy path (pedestal / Heroes) is untouched.
-   16|  */
-   17| import * as THREE from 'three';
-   18| import { solveIK2, ikLast } from './ik';
-   19| 
-   20| /** The conventional "down" limb axis, kept for callers that use it as a hint. */
-   21| export const LIMB_AXIS = new THREE.Vector3(0, -1, 0);
-   22| 
-   23| const _q = new THREE.Quaternion();
-   24| const _inv = new THREE.Quaternion();
-   25| const _d = new THREE.Vector3();
-   26| const _u = new THREE.Vector3();
-   27| const _v = new THREE.Vector3();
-   28| const _root = new THREE.Vector3();
-   29| const _tgt = new THREE.Vector3();
-   30| const _knee = new THREE.Vector3();
-   31| const _pole = new THREE.Vector3();
-   32| const _hipW = new THREE.Vector3();
-   33| const _pos = new THREE.Vector3();
-   34| const _lenA = new THREE.Vector3();
-   35| const _lenB = new THREE.Vector3();
-   36| 
-   37| /**
-   38|  * Point a bone so the direction of its CHILD, expressed in the bone's own
-   39|  * local space, runs along `dirWorld`.
-   40|  */
-   41| export function aimBoneTowards(
-   42|   bone: THREE.Bone,
-   43|   childLocalDir: THREE.Vector3,
-   44|   dirWorld: THREE.Vector3,
-   45|   parentWorldQuat: THREE.Quaternion,
-   46| ): void {
-   47|   const u = _u.copy(childLocalDir);
-   48|   if (u.lengthSq() < 1e-12) u.set(0, -1, 0);
-   49|   u.normalize();
-   50|   const d = _d.copy(dirWorld);
-   51|   if (d.lengthSq() < 1e-12) d.set(0, -1, 0);
-   52|   d.normalize();
-   53|   _q.setFromUnitVectors(u, d);
-   54|   bone.quaternion.copy(parentWorldQuat).invert().multiply(_q);
-   55| }
-   56| 
-   57| /** Aim a limb whose child really does sit on local -Y. */
-   58| export function aimBone(bone: THREE.Bone, dirWorld: THREE.Vector3, parentWorldQuat: THREE.Quaternion): void {
-   59|   aimBoneTowards(bone, LIMB_AXIS, dirWorld, parentWorldQuat);
-   60| }
-   61| 
-   62| export interface LegSolveInput {
-   63|   hip: THREE.Bone;
-   64|   knee: THREE.Bone;
-   65|   ankle: THREE.Bone;
-   66|   /** optional: segment lengths are read from the bones, so callers cannot lie */
-   67|   l1?: number;
-   68|   l2?: number;
-   69|   /** desired world position of the ankle */
-   70|   targetWorld: THREE.Vector3;
-   71|   /** world-space pole hint (roughly forward) */
-   72|   poleWorld: THREE.Vector3;
-   73|   /** previous knee position in the hip-parent's local space. Read to keep the
-   74|    *  solve on the same branch, then written back with the new knee. */
-   75|   prevKnee?: THREE.Vector3;
-   76|   /** v19: exact parent-space solve (World path). */
-   77|   exact?: boolean;
-   78|   /** v19: world rotation the foot holds (creature heading). Default: world identity. */
-   79|   footWorld?: THREE.Quaternion;
-   80| }
-   81| 
-   82| const _xq = new THREE.Quaternion();
-   83| const _xinv = new THREE.Quaternion();
-   84| const _xh = new THREE.Quaternion();
-   85| const _xt = new THREE.Vector3();
-   86| const _xr = new THREE.Vector3();
-   87| const _xp = new THREE.Vector3();
-   88| const _xk = new THREE.Vector3();
-   89| const _xu = new THREE.Vector3();
-   90| const _xd = new THREE.Vector3();
-   91| 
-   92| function solveLegExact(i: LegSolveInput, hipParent: THREE.Object3D): boolean {
-   93|   // getWorldQuaternion / worldToLocal refresh the ancestor chain themselves
-   94|   const pw = hipParent.getWorldQuaternion(_xq);
-   95|   const targetLocal = hipParent.worldToLocal(_xt.copy(i.targetWorld));
-   96|   const hipLocal = _xr.copy(i.hip.position);
-   97|   const poleLocal = _xp.copy(i.poleWorld).applyQuaternion(_xinv.copy(pw).invert()).normalize();
-   98|   const L1 = i.knee.position.length();
-   99|   const L2 = i.ankle.position.length();
-  100|   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _xk, i.prevKnee, true);
-  101| 
-  102|   // hip: minimal arc from its rest child direction onto the solved knee, in parent space
-  103|   _xu.copy(i.knee.position).normalize();
-  104|   _xd.copy(_xk).sub(hipLocal).normalize();
-  105|   i.hip.quaternion.setFromUnitVectors(_xu, _xd);
-  106| 
-  107|   // knee: same, in the hip's frame, aiming the shin at the target
-  108|   _xh.copy(i.hip.quaternion).invert();
-  109|   _xd.copy(targetLocal).sub(hipLocal).applyQuaternion(_xh).sub(i.knee.position).normalize();
-  110|   _xu.copy(i.ankle.position).normalize();
-  111|   i.knee.quaternion.setFromUnitVectors(_xu, _xd);
-  112| 
-  113|   // ankle: foot flat on the ground, facing the creature's heading when given
-  114|   _xh.copy(pw).multiply(i.hip.quaternion).multiply(i.knee.quaternion).invert();
-  115|   if (i.footWorld) _xh.multiply(i.footWorld);
-  116|   i.ankle.quaternion.copy(_xh);
-  117| 
-  118|   if (i.prevKnee) i.prevKnee.copy(_xk);
-  119|   return ikLast.fallback;
-  120| }
-  121| 
-  122| /**
-  123|  * Solve one leg. The hip's position is never touched; only the hip and knee
-  124|  * rotations move, and the ankle is levelled to the world so the foot stays flat.
-  125|  * Returns true when the pole grazed the limb axis (forensics).
-  126|  */
-  127| export function solveLeg(i: LegSolveInput): boolean {
-  128|   const hipParent = i.hip.parent;
-  129|   if (!hipParent) return false;
-  130|   if (i.exact) return solveLegExact(i, hipParent);
-  131|   hipParent.updateMatrixWorld(true);
-  132| 
-  133|   const pw = new THREE.Quaternion();
-  134|   hipParent.getWorldQuaternion(pw);
-  135|   const pwInv = _inv.copy(pw).invert();
-  136| 
-  137|   const targetLocal = _tgt.copy(i.targetWorld);
-  138|   hipParent.worldToLocal(targetLocal);
-  139| 
-  140|   const hipLocal = _root.copy(i.hip.position);
-  141|   const poleLocal = _pole.copy(i.poleWorld).applyQuaternion(pwInv).normalize();
-  142| 
-  143|   // Segment lengths come straight off the bone rest offsets.
-  144|   const L1 = _lenA.copy(i.knee.position).length();
-  145|   const L2 = _lenB.copy(i.ankle.position).length();
-  146|   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _knee, i.prevKnee);
-  147| 
-  148|   // hip: rotate its rest child direction onto the solved knee direction
-  149|   const kneeDirWorld = _v.copy(_knee).sub(hipLocal).applyQuaternion(pw).normalize();
-  150|   aimBoneTowards(i.hip, i.knee.position, kneeDirWorld, pw);
-  151| 
-  152|   // knee: find where it actually landed, then aim its child at the plant
-  153|   const hipWorldQuat = new THREE.Quaternion().multiplyQuaternions(pw, i.hip.quaternion);
-  154|   const hipWorldPos = _hipW.copy(hipLocal).applyQuaternion(pw).add(hipParent.getWorldPosition(_pos));
-  155|   const kneeWorld = new THREE.Vector3().copy(i.knee.position).applyQuaternion(hipWorldQuat).add(hipWorldPos);
-  156|   const shinDirWorld = _v.copy(i.targetWorld).sub(kneeWorld).normalize();
-  157|   aimBoneTowards(i.knee, i.ankle.position, shinDirWorld, hipWorldQuat);
-  158| 
-  159|   // keep the shoe flat on the ground: cancel the shin's rotation
-  160|   const shinWorldQuat = new THREE.Quaternion().multiplyQuaternions(hipWorldQuat, i.knee.quaternion);
-  161|   i.ankle.quaternion.copy(shinWorldQuat).invert();
-  162| 
-  163|   // remember this frame's knee so tomorrow's solve stays on the same branch
-  164|   if (i.prevKnee) i.prevKnee.copy(_knee);
-  165|   return false;
-  166| }
-  167| 
-  168| /** A soft, critically damped 1D spring used for ears, tails and antennae. */
-  169| export class Wobble {
-  170|   v = 0;
-  171|   x = 0;
-  172|   step(drive: number, dt: number, k = 42, c = 7): number {
-  173|     const a = -k * this.x - c * this.v + drive;
-  174|     this.v += a * dt;
-  175|     this.x += this.v * dt;
-  176|     if (this.x > 0.5) { this.x = 0.5; this.v *= 0.4; }
-  177|     if (this.x < -0.5) { this.x = -0.5; this.v *= 0.4; }
-  178|     return this.x;
-  179|   }
-  180| }
+   13|  * direction. That removes the world-frame twist and the squash-shear ankle miss.
+   14|  *
+   15|  * v20 SWIVEL LIMIT (World): the knee may rotate about the hip->foot line at most
+   16|  * `maxSwivel` per call relative to `swivelFrom`. Rotating about that line keeps
+   17|  * both segment lengths, so the foot stays EXACTLY on target and the bend is
+   18|  * unchanged: smooth knees without any foot slip.
+   19|  *
+   20|  * The legacy path (pedestal / Heroes) is untouched.
+   21|  */
+   22| import * as THREE from 'three';
+   23| import { solveIK2, ikLast } from './ik';
+   24| 
+   25| /** The conventional "down" limb axis, kept for callers that use it as a hint. */
+   26| export const LIMB_AXIS = new THREE.Vector3(0, -1, 0);
+   27| 
+   28| /** v20: did the LAST exact solve clamp the knee swivel? (forensics) */
+   29| export const legLast = { swivel: false };
+   30| 
+   31| const _q = new THREE.Quaternion();
+   32| const _inv = new THREE.Quaternion();
+   33| const _d = new THREE.Vector3();
+   34| const _u = new THREE.Vector3();
+   35| const _v = new THREE.Vector3();
+   36| const _root = new THREE.Vector3();
+   37| const _tgt = new THREE.Vector3();
+   38| const _knee = new THREE.Vector3();
+   39| const _pole = new THREE.Vector3();
+   40| const _hipW = new THREE.Vector3();
+   41| const _pos = new THREE.Vector3();
+   42| const _lenA = new THREE.Vector3();
+   43| const _lenB = new THREE.Vector3();
+   44| 
+   45| /**
+   46|  * Point a bone so the direction of its CHILD, expressed in the bone's own
+   47|  * local space, runs along `dirWorld`.
+   48|  */
+   49| export function aimBoneTowards(
+   50|   bone: THREE.Bone,
+   51|   childLocalDir: THREE.Vector3,
+   52|   dirWorld: THREE.Vector3,
+   53|   parentWorldQuat: THREE.Quaternion,
+   54| ): void {
+   55|   const u = _u.copy(childLocalDir);
+   56|   if (u.lengthSq() < 1e-12) u.set(0, -1, 0);
+   57|   u.normalize();
+   58|   const d = _d.copy(dirWorld);
+   59|   if (d.lengthSq() < 1e-12) d.set(0, -1, 0);
+   60|   d.normalize();
+   61|   _q.setFromUnitVectors(u, d);
+   62|   bone.quaternion.copy(parentWorldQuat).invert().multiply(_q);
+   63| }
+   64| 
+   65| /** Aim a limb whose child really does sit on local -Y. */
+   66| export function aimBone(bone: THREE.Bone, dirWorld: THREE.Vector3, parentWorldQuat: THREE.Quaternion): void {
+   67|   aimBoneTowards(bone, LIMB_AXIS, dirWorld, parentWorldQuat);
+   68| }
+   69| 
+   70| export interface LegSolveInput {
+   71|   hip: THREE.Bone;
+   72|   knee: THREE.Bone;
+   73|   ankle: THREE.Bone;
+   74|   /** optional: segment lengths are read from the bones, so callers cannot lie */
+   75|   l1?: number;
+   76|   l2?: number;
+   77|   /** desired world position of the ankle */
+   78|   targetWorld: THREE.Vector3;
+   79|   /** world-space pole hint (roughly forward) */
+   80|   poleWorld: THREE.Vector3;
+   81|   /** previous knee position in the hip-parent's local space. Read to keep the
+   82|    *  solve on the same branch, then written back with the new knee. */
+   83|   prevKnee?: THREE.Vector3;
+   84|   /** v19: exact parent-space solve (World path). */
+   85|   exact?: boolean;
+   86|   /** v19: world rotation the foot holds (creature heading). Default: world identity. */
+   87|   footWorld?: THREE.Quaternion;
+   88|   /** v20: reference knee (hip-parent space) the swivel is limited against */
+   89|   swivelFrom?: THREE.Vector3;
+   90|   /** v20: max knee swivel about hip->foot, radians, for this call */
+   91|   maxSwivel?: number;
+   92| }
+   93| 
+   94| const _xq = new THREE.Quaternion();
+   95| const _xinv = new THREE.Quaternion();
+   96| const _xh = new THREE.Quaternion();
+   97| const _xt = new THREE.Vector3();
+   98| const _xr = new THREE.Vector3();
+   99| const _xp = new THREE.Vector3();
+  100| const _xk = new THREE.Vector3();
+  101| const _xu = new THREE.Vector3();
+  102| const _xd = new THREE.Vector3();
+  103| const _sa = new THREE.Vector3();
+  104| const _s0 = new THREE.Vector3();
+  105| const _s1 = new THREE.Vector3();
+  106| const _s2 = new THREE.Vector3();
+  107| const _sq = new THREE.Quaternion();
+  108| 
+  109| /** Rotate `knee` about the root->target line so it is at most `maxA` from `ref`. */
+  110| function limitSwivel(root: THREE.Vector3, target: THREE.Vector3, knee: THREE.Vector3, ref: THREE.Vector3, maxA: number): boolean {
+  111|   _sa.copy(target).sub(root);
+  112|   const len = _sa.length();
+  113|   if (len < 1e-6) return false;
+  114|   _sa.multiplyScalar(1 / len);
+  115|   _s0.copy(ref).sub(root);
+  116|   _s0.addScaledVector(_sa, -_s0.dot(_sa));
+  117|   _s1.copy(knee).sub(root);
+  118|   _s1.addScaledVector(_sa, -_s1.dot(_sa));
+  119|   if (_s0.lengthSq() < 1e-12 || _s1.lengthSq() < 1e-12) return false;
+  120|   const ang = Math.atan2(_s2.crossVectors(_s0, _s1).dot(_sa), _s0.dot(_s1));
+  121|   const over = Math.abs(ang) - Math.max(0, maxA);
+  122|   if (over <= 0) return false;
+  123|   _sq.setFromAxisAngle(_sa, -Math.sign(ang) * over);
+  124|   knee.sub(root).applyQuaternion(_sq).add(root);
+  125|   return true;
+  126| }
+  127| 
+  128| function solveLegExact(i: LegSolveInput, hipParent: THREE.Object3D): boolean {
+  129|   legLast.swivel = false;
+  130|   // getWorldQuaternion / worldToLocal refresh the ancestor chain themselves
+  131|   const pw = hipParent.getWorldQuaternion(_xq);
+  132|   const targetLocal = hipParent.worldToLocal(_xt.copy(i.targetWorld));
+  133|   const hipLocal = _xr.copy(i.hip.position);
+  134|   const poleLocal = _xp.copy(i.poleWorld).applyQuaternion(_xinv.copy(pw).invert()).normalize();
+  135|   const L1 = i.knee.position.length();
+  136|   const L2 = i.ankle.position.length();
+  137|   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _xk, i.prevKnee, true);
+  138|   if (i.swivelFrom && i.maxSwivel !== undefined) {
+  139|     if (limitSwivel(hipLocal, targetLocal, _xk, i.swivelFrom, i.maxSwivel)) legLast.swivel = true;
+  140|   }
+  141| 
+  142|   // hip: minimal arc from its rest child direction onto the solved knee, in parent space
+  143|   _xu.copy(i.knee.position).normalize();
+  144|   _xd.copy(_xk).sub(hipLocal).normalize();
+  145|   i.hip.quaternion.setFromUnitVectors(_xu, _xd);
+  146| 
+  147|   // knee: same, in the hip's frame, aiming the shin at the target
+  148|   _xh.copy(i.hip.quaternion).invert();
+  149|   _xd.copy(targetLocal).sub(hipLocal).applyQuaternion(_xh).sub(i.knee.position).normalize();
+  150|   _xu.copy(i.ankle.position).normalize();
+  151|   i.knee.quaternion.setFromUnitVectors(_xu, _xd);
+  152| 
+  153|   // ankle: foot flat on the ground, facing the creature's heading when given
+  154|   _xh.copy(pw).multiply(i.hip.quaternion).multiply(i.knee.quaternion).invert();
+  155|   if (i.footWorld) _xh.multiply(i.footWorld);
+  156|   i.ankle.quaternion.copy(_xh);
+  157| 
+  158|   if (i.prevKnee) i.prevKnee.copy(_xk);
+  159|   return ikLast.fallback;
+  160| }
+  161| 
+  162| /**
+  163|  * Solve one leg. The hip's position is never touched; only the hip and knee
+  164|  * rotations move, and the ankle is levelled to the world so the foot stays flat.
+  165|  * Returns true when the pole grazed the limb axis (forensics).
+  166|  */
+  167| export function solveLeg(i: LegSolveInput): boolean {
+  168|   const hipParent = i.hip.parent;
+  169|   if (!hipParent) return false;
+  170|   if (i.exact) return solveLegExact(i, hipParent);
+  171|   hipParent.updateMatrixWorld(true);
+  172| 
+  173|   const pw = new THREE.Quaternion();
+  174|   hipParent.getWorldQuaternion(pw);
+  175|   const pwInv = _inv.copy(pw).invert();
+  176| 
+  177|   const targetLocal = _tgt.copy(i.targetWorld);
+  178|   hipParent.worldToLocal(targetLocal);
+  179| 
+  180|   const hipLocal = _root.copy(i.hip.position);
+  181|   const poleLocal = _pole.copy(i.poleWorld).applyQuaternion(pwInv).normalize();
+  182| 
+  183|   // Segment lengths come straight off the bone rest offsets.
+  184|   const L1 = _lenA.copy(i.knee.position).length();
+  185|   const L2 = _lenB.copy(i.ankle.position).length();
+  186|   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _knee, i.prevKnee);
+  187| 
+  188|   // hip: rotate its rest child direction onto the solved knee direction
+  189|   const kneeDirWorld = _v.copy(_knee).sub(hipLocal).applyQuaternion(pw).normalize();
+  190|   aimBoneTowards(i.hip, i.knee.position, kneeDirWorld, pw);
+  191| 
+  192|   // knee: find where it actually landed, then aim its child at the plant
+  193|   const hipWorldQuat = new THREE.Quaternion().multiplyQuaternions(pw, i.hip.quaternion);
+  194|   const hipWorldPos = _hipW.copy(hipLocal).applyQuaternion(pw).add(hipParent.getWorldPosition(_pos));
+  195|   const kneeWorld = new THREE.Vector3().copy(i.knee.position).applyQuaternion(hipWorldQuat).add(hipWorldPos);
+  196|   const shinDirWorld = _v.copy(i.targetWorld).sub(kneeWorld).normalize();
+  197|   aimBoneTowards(i.knee, i.ankle.position, shinDirWorld, hipWorldQuat);
+  198| 
+  199|   // keep the shoe flat on the ground: cancel the shin's rotation
+  200|   const shinWorldQuat = new THREE.Quaternion().multiplyQuaternions(hipWorldQuat, i.knee.quaternion);
+  201|   i.ankle.quaternion.copy(shinWorldQuat).invert();
+  202| 
+  203|   // remember this frame's knee so tomorrow's solve stays on the same branch
+  204|   if (i.prevKnee) i.prevKnee.copy(_knee);
+  205|   return false;
+  206| }
+  207| 
+  208| /** A soft, critically damped 1D spring used for ears, tails and antennae. */
+  209| export class Wobble {
+  210|   v = 0;
+  211|   x = 0;
+  212|   step(drive: number, dt: number, k = 42, c = 7): number {
+  213|     const a = -k * this.x - c * this.v + drive;
+  214|     this.v += a * dt;
+  215|     this.x += this.v * dt;
+  216|     if (this.x > 0.5) { this.x = 0.5; this.v *= 0.4; }
+  217|     if (this.x < -0.5) { this.x = -0.5; this.v *= 0.4; }
+  218|     return this.x;
+  219|   }
+  220| }

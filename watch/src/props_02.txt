@@ -1,0 +1,75 @@
+  501|       if (bush.shake <= 0) continue;
+  502|       bush.shake = Math.max(0, bush.shake - dt * 2.6);
+  503|       const m = this.bushMeshes[i];
+  504|       if (m) {
+  505|         const w = bush.shake * Math.sin(bush.shake * 34) * 0.16;
+  506|         m.rotation.z = w;
+  507|         m.rotation.x = w * 0.5;
+  508|       }
+  509|     }
+  510| 
+  511|     // ball: roll, slow down, and never leave the meadow
+  512|     const b = this.ball;
+  513|     if (b.vel.lengthSq() > 1e-5) {
+  514|       b.pos.addScaledVector(b.vel, dt);
+  515|       const ground = heightAt(b.pos.x, b.pos.z) + b.radius;
+  516|       if (b.pos.y < ground) b.pos.y = ground;
+  517|       b.spin += b.vel.length() * dt * 6;
+  518|       const rr = Math.hypot(b.pos.x, b.pos.z);
+  519|       if (rr > WALK_R + 0.6) {
+  520|         const n = new THREE.Vector3(-b.pos.x, 0, -b.pos.z).normalize();
+  521|         b.vel.reflect(n).multiplyScalar(0.5);
+  522|         b.pos.x = n.x * (WALK_R + 0.6) * -1;
+  523|         b.pos.z = n.z * (WALK_R + 0.6) * -1;
+  524|       }
+  525|       b.vel.multiplyScalar(Math.max(0, 1 - dt * 1.15));
+  526|       if (b.vel.lengthSq() < 0.0015) b.vel.set(0, 0, 0);
+  527|     } else {
+  528|       b.pos.y += (heightAt(b.pos.x, b.pos.z) + b.radius - b.pos.y) * Math.min(1, dt * 8);
+  529|     }
+  530|     this.ballMesh.position.copy(b.pos);
+  531|     this.ballMesh.rotation.x = b.spin * 0.6;
+  532|     this.ballMesh.rotation.z = b.spin * 0.9;
+  533|     void this.tmpN;
+  534|     void normalAt;
+  535|     void this.trampleDirty;
+  536|   }
+  537| }
+  538| 
+  539| /** Tiny local merge, so the props module does not pull in the geometry utils. */
+  540| function mergeSimple(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  541|   const out = new THREE.BufferGeometry();
+  542|   let vCount = 0;
+  543|   let iCount = 0;
+  544|   for (const g of list) {
+  545|     vCount += g.getAttribute('position').count;
+  546|     iCount += g.getIndex() ? (g.getIndex() as THREE.BufferAttribute).count : g.getAttribute('position').count;
+  547|   }
+  548|   const pos = new Float32Array(vCount * 3);
+  549|   const nrm = new Float32Array(vCount * 3);
+  550|   const col = new Float32Array(vCount * 3);
+  551|   const idx = new Uint32Array(iCount);
+  552|   let vo = 0;
+  553|   let io = 0;
+  554|   for (const g of list) {
+  555|     const p = g.getAttribute('position') as THREE.BufferAttribute;
+  556|     const n = g.getAttribute('normal') as THREE.BufferAttribute;
+  557|     const c = g.getAttribute('color') as THREE.BufferAttribute;
+  558|     for (let i = 0; i < p.count; i++) {
+  559|       pos[(vo + i) * 3] = p.getX(i); pos[(vo + i) * 3 + 1] = p.getY(i); pos[(vo + i) * 3 + 2] = p.getZ(i);
+  560|       nrm[(vo + i) * 3] = n.getX(i); nrm[(vo + i) * 3 + 1] = n.getY(i); nrm[(vo + i) * 3 + 2] = n.getZ(i);
+  561|       col[(vo + i) * 3] = c.getX(i); col[(vo + i) * 3 + 1] = c.getY(i); col[(vo + i) * 3 + 2] = c.getZ(i);
+  562|     }
+  563|     const gi = g.getIndex();
+  564|     if (gi) for (let i = 0; i < gi.count; i++) idx[io + i] = vo + gi.getX(i);
+  565|     else for (let i = 0; i < p.count; i++) idx[io + i] = vo + i;
+  566|     io += gi ? gi.count : p.count;
+  567|     vo += p.count;
+  568|     g.dispose();
+  569|   }
+  570|   out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  571|   out.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  572|   out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  573|   out.setIndex(new THREE.BufferAttribute(idx, 1));
+  574|   return out;
+  575| }

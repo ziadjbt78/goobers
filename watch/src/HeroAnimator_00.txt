@@ -19,7 +19,7 @@
    19| import * as THREE from 'three';
    20| import type { HeroTemplate } from '../hero/types';
    21| import type { HeroHandle } from '../render/hero/HeroRenderer';
-   22| import { solveLeg, Wobble } from './pose';
+   22| import { solveLeg, Wobble, legLast } from './pose';
    23| 
    24| const X = new THREE.Vector3(1, 0, 0);
    25| const Y = new THREE.Vector3(0, 1, 0);
@@ -32,219 +32,219 @@
    32| /** v18 soft IK band: reach is untouched below SOFT_START and approaches SOFT_TOP asymptotically */
    33| const SOFT_START = 0.93;
    34| const SOFT_TOP = 0.99;
-   35| function crossedPhase(a: number, b: number, m: number): boolean {
-   36|   if (b >= a) return a < m && b >= m;
-   37|   return a < m || b >= m;
-   38| }
-   39| const _lim = new THREE.Quaternion();
-   40| 
-   41| export type Mood = 'neutral' | 'happy' | 'surprised' | 'sleepy' | 'scared' | 'dizzy' | 'love' | 'sad';
-   42| 
-   43| /** Additive action poses. All are blended, never cut. */
-   44| export type ActionId =
-   45|   | 'none' | 'eat' | 'sniff' | 'play' | 'pet' | 'sleep' | 'greet'
-   46|   | 'carry' | 'startle' | 'dig' | 'splash' | 'swim' | 'fly' | 'perch'
-   47|   | 'petRoll' | 'chomp' | 'wave';
-   48| 
-   49| /** How long each action is held before the brain may pick another. */
-   50| export const ACTION_MIN: Record<ActionId, number> = {
-   51|   none: 0, eat: 3.0, sniff: 2.2, play: 3.0, pet: 2.0, sleep: 4.0, greet: 2.4,
-   52|   carry: 1.0, startle: 1.2, dig: 2.6, splash: 2.4, swim: 3.0, fly: 3.0, perch: 3.0,
-   53|   petRoll: 3.0, chomp: 2.6, wave: 2.0,
-   54| };
-   55| 
-   56| export interface Drive {
-   57|   /** v10 world-path gait bookkeeping, written by the Agent every frame */
-   58|   stride: number;
-   59|   heading: number;
-   60|   groundY: ((x: number, z: number) => number) | null;
-   61|   /** metres per second the body is ACTUALLY travelling */
-   62|   speed: number;
-   63|   /** local body bob, metres. Never the terrain height — the group carries that. */
-   64|   lift: number;
-   65|   squash: number;
-   66|   /** extra local yaw on the body, radians */
-   67|   yaw: number;
-   68|   /** roll into the turn, radians */
-   69|   lean: number;
-   70|   /** pitch from acceleration / recoil, radians */
-   71|   pitch: number;
-   72|   /** terrain slope under the feet, radians */
-   73|   slopePitch: number;
-   74|   slopeRoll: number;
-   75|   /** how far the head has turned ahead of the body, radians */
-   76|   headLead: number;
-   77|   /** how far the EYES have turned ahead of the head — always further, sooner */
-   78|   eyeLead: number;
-   79|   /** where each foot should go, world space, one per template foot */
-   80|   footTargets: THREE.Vector3[];
-   81|   /** true while a foot is airborne — airborne legs may be rate limited */
-   82|   footSwing: boolean[];
-   83| }
-   84| 
-   85| interface LegRig {
-   86|   hip: THREE.Bone;
-   87|   knee: THREE.Bone;
-   88|   ankle: THREE.Bone;
-   89|   plant: THREE.Vector3;
-   90|   step: number;
-   91|   lift: number;
-   92|   phase: number;
-   93|   index: number;
-   94|   prev: THREE.Quaternion[];
-   95|   kneeLocal: THREE.Vector3;
-   96|   /** v9: the pole direction in CREATURE space, one per leg, so the two-bone
-   97|    *  solve can never pick the mirrored branch. */
-   98|   poleLocal: THREE.Vector3;
-   99|   /** smoothed world-space pole actually handed to the solver */
-  100|   poleSm: THREE.Vector3;
-  101|   /** true while this foot was airborne last frame (the pop-prone transition) */
-  102|   wasSwing: boolean;
-  103|   // ---- v10 world planting -------------------------------------------------
-  104|   /** world point the foot is pinned to while planted */
-  105|   lock: THREE.Vector3;
-  106|   swingFrom: THREE.Vector3;
-  107|   swingTo: THREE.Vector3;
-  108|   /** 0..1 through the current swing */
-  109|   swingT: number;
-  110|   /** 'plant' pins the foot in the world, 'swing' arcs it to the next plant */
-  111|   mode: 'plant' | 'swing';
-  112|   /** swing length in seconds for the current step */
-  113|   swingDur: number;
-  114|   init: boolean;
-  115|   /** body world position when this foot last planted, for the idle-drift guard */
-  116|   bodyAtPlant: THREE.Vector3;
-  117|   /** bone segment lengths, read off the rest offsets */
-  118|   L1: number;
-  119|   L2: number;
-  120|   /** rest direction of the foot in creature space, for the turn guard */
-  121|   restAngle: number;
-  122|   /** true when the last lift was forced early (reach / turn / drift guard) */
-  123|   forced: boolean;
-  124|   /** v12: landed this frame; lock to where the ankle REALLY is after the solve */
-  125|   landPending: boolean;
-  126|   /** v12: seconds since this foot last landed */
-  127|   landT: number;
-  128|   /** v12: last frame's cycle position, for edge-triggered lifts */
-  129|   prevU: number;
-  130|   /** v13: ankle miss after the closed-loop solve, world units */
-  131|   err: number;
-  132|   /** v13: live world leg length (hip->knee + knee->ankle) */
-  133|   reachW: number;
-  134|   /** v14: ankle miss AFTER the rate limiter (limiter lag shows up here) */
-  135|   postErr: number;
-  136|   /** v15: legs were hanging free; next planted frame swings in from the real ankle */
-  137|   relaunch: boolean;
-  138|   /** v15: rest rotation of the hip's parent relative to the creature, for a body-space pole */
-  139|   parRel: THREE.Quaternion | null;
-  140|   /** v16: planted foot raised straight up because the body lifted past its reach */
-  141|   lifted: boolean;
-  142| }
-  143| 
-  144| interface ArmRig { upper: THREE.Bone; lower: THREE.Bone; side: number }
-  145| 
-  146| interface Wiggle { bone: THREE.Bone; w: Wobble; axis: 'x' | 'y'; gain: number }
-  147| 
-  148| /** Ambient idle behaviours — the creature is never a statue. */
-  149| type IdleAct = 'none' | 'sniff' | 'scratch' | 'sit' | 'yawn';
+   35| /** v20 task-space limits: foot target speed (leg lengths / s) and knee swivel about hip->foot (rad/s) */
+   36| const FOOT_RATE = 18;
+   37| const SWIVEL_RATE = 10;
+   38| function crossedPhase(a: number, b: number, m: number): boolean {
+   39|   if (b >= a) return a < m && b >= m;
+   40|   return a < m || b >= m;
+   41| }
+   42| const _lim = new THREE.Quaternion();
+   43| 
+   44| export type Mood = 'neutral' | 'happy' | 'surprised' | 'sleepy' | 'scared' | 'dizzy' | 'love' | 'sad';
+   45| 
+   46| /** Additive action poses. All are blended, never cut. */
+   47| export type ActionId =
+   48|   | 'none' | 'eat' | 'sniff' | 'play' | 'pet' | 'sleep' | 'greet'
+   49|   | 'carry' | 'startle' | 'dig' | 'splash' | 'swim' | 'fly' | 'perch'
+   50|   | 'petRoll' | 'chomp' | 'wave';
+   51| 
+   52| /** How long each action is held before the brain may pick another. */
+   53| export const ACTION_MIN: Record<ActionId, number> = {
+   54|   none: 0, eat: 3.0, sniff: 2.2, play: 3.0, pet: 2.0, sleep: 4.0, greet: 2.4,
+   55|   carry: 1.0, startle: 1.2, dig: 2.6, splash: 2.4, swim: 3.0, fly: 3.0, perch: 3.0,
+   56|   petRoll: 3.0, chomp: 2.6, wave: 2.0,
+   57| };
+   58| 
+   59| export interface Drive {
+   60|   /** v10 world-path gait bookkeeping, written by the Agent every frame */
+   61|   stride: number;
+   62|   heading: number;
+   63|   groundY: ((x: number, z: number) => number) | null;
+   64|   /** metres per second the body is ACTUALLY travelling */
+   65|   speed: number;
+   66|   /** local body bob, metres. Never the terrain height — the group carries that. */
+   67|   lift: number;
+   68|   squash: number;
+   69|   /** extra local yaw on the body, radians */
+   70|   yaw: number;
+   71|   /** roll into the turn, radians */
+   72|   lean: number;
+   73|   /** pitch from acceleration / recoil, radians */
+   74|   pitch: number;
+   75|   /** terrain slope under the feet, radians */
+   76|   slopePitch: number;
+   77|   slopeRoll: number;
+   78|   /** how far the head has turned ahead of the body, radians */
+   79|   headLead: number;
+   80|   /** how far the EYES have turned ahead of the head — always further, sooner */
+   81|   eyeLead: number;
+   82|   /** where each foot should go, world space, one per template foot */
+   83|   footTargets: THREE.Vector3[];
+   84|   /** true while a foot is airborne — airborne legs may be rate limited */
+   85|   footSwing: boolean[];
+   86| }
+   87| 
+   88| interface LegRig {
+   89|   hip: THREE.Bone;
+   90|   knee: THREE.Bone;
+   91|   ankle: THREE.Bone;
+   92|   plant: THREE.Vector3;
+   93|   step: number;
+   94|   lift: number;
+   95|   phase: number;
+   96|   index: number;
+   97|   prev: THREE.Quaternion[];
+   98|   kneeLocal: THREE.Vector3;
+   99|   /** v9: the pole direction in CREATURE space, one per leg, so the two-bone
+  100|    *  solve can never pick the mirrored branch. */
+  101|   poleLocal: THREE.Vector3;
+  102|   /** smoothed world-space pole actually handed to the solver */
+  103|   poleSm: THREE.Vector3;
+  104|   /** true while this foot was airborne last frame (the pop-prone transition) */
+  105|   wasSwing: boolean;
+  106|   // ---- v10 world planting -------------------------------------------------
+  107|   /** world point the foot is pinned to while planted */
+  108|   lock: THREE.Vector3;
+  109|   swingFrom: THREE.Vector3;
+  110|   swingTo: THREE.Vector3;
+  111|   /** 0..1 through the current swing */
+  112|   swingT: number;
+  113|   /** 'plant' pins the foot in the world, 'swing' arcs it to the next plant */
+  114|   mode: 'plant' | 'swing';
+  115|   /** swing length in seconds for the current step */
+  116|   swingDur: number;
+  117|   init: boolean;
+  118|   /** body world position when this foot last planted, for the idle-drift guard */
+  119|   bodyAtPlant: THREE.Vector3;
+  120|   /** bone segment lengths, read off the rest offsets */
+  121|   L1: number;
+  122|   L2: number;
+  123|   /** rest direction of the foot in creature space, for the turn guard */
+  124|   restAngle: number;
+  125|   /** true when the last lift was forced early (reach / turn / drift guard) */
+  126|   forced: boolean;
+  127|   /** v12: landed this frame; lock to where the ankle REALLY is after the solve */
+  128|   landPending: boolean;
+  129|   /** v12: seconds since this foot last landed */
+  130|   landT: number;
+  131|   /** v12: last frame's cycle position, for edge-triggered lifts */
+  132|   prevU: number;
+  133|   /** v13: ankle miss after the closed-loop solve, world units */
+  134|   err: number;
+  135|   /** v13: live world leg length (hip->knee + knee->ankle) */
+  136|   reachW: number;
+  137|   /** v14: ankle miss AFTER the rate limiter (limiter lag shows up here) */
+  138|   postErr: number;
+  139|   /** v15: legs were hanging free; next planted frame swings in from the real ankle */
+  140|   relaunch: boolean;
+  141|   /** v15: rest rotation of the hip's parent relative to the creature, for a body-space pole */
+  142|   parRel: THREE.Quaternion | null;
+  143|   /** v16: planted foot raised straight up because the body lifted past its reach */
+  144|   lifted: boolean;
+  145| }
+  146| 
+  147| interface ArmRig { upper: THREE.Bone; lower: THREE.Bone; side: number }
+  148| 
+  149| interface Wiggle { bone: THREE.Bone; w: Wobble; axis: 'x' | 'y'; gain: number }
   150| 
-  151| export class HeroAnimator {
-  152|   readonly template: HeroTemplate;
-  153|   readonly handle: HeroHandle;
-  154| 
-  155|   gait = 0.5;
-  156|   /**
-  157|    * v8 external-phase mode. The motion layer (CreatureMotion) owns the clock,
-  158|    * every body-attitude channel (lift / squash / lean / pitch / yaw) and the
-  159|    * whole face; the animator writes ONLY the in-place gait cycle, the spine,
-  160|    * the arms and the secondary wobble. Entered by `setGait(amount, phase)`.
-  161|    */
-  162|   external = false;
-  163|   private externalPhase = 0;
-  164|   excited = 0;
-  165|   mood: Mood = 'neutral';
-  166|   driven = false;
-  167|   action: ActionId = 'none';
-  168|   actionW = 0;
-  169|   actionT = 0;
-  170|   locomotionW = 0;
-  171|   /** verification switch: kills every random source so two runs match exactly */
-  172|   deterministic = false;
-  173|   /** true while the player is holding this creature: petting or carrying */
-  174|   petted = false;
-  175|   held = false;
-  176| 
-  177|   drive: Drive = {
-  178|     speed: 0, lift: 0, squash: 1, yaw: 0, lean: 0, pitch: 0,
-  179|     stride: 0.3, heading: 0, groundY: null,
-  180|     slopePitch: 0, slopeRoll: 0, headLead: 0, eyeLead: 0, footTargets: [], footSwing: [],
-  181|   };
-  182| 
-  183|   /** Face parameters, all 0..1 unless noted. Written by the action layer. */
-  184|   face = { lid: 0, mouthOpen: 0, mouthWide: 1, blush: 0.35, pupil: 1, gazeSpin: 0 };
+  151| /** Ambient idle behaviours — the creature is never a statue. */
+  152| type IdleAct = 'none' | 'sniff' | 'scratch' | 'sit' | 'yawn';
+  153| 
+  154| export class HeroAnimator {
+  155|   readonly template: HeroTemplate;
+  156|   readonly handle: HeroHandle;
+  157| 
+  158|   gait = 0.5;
+  159|   /**
+  160|    * v8 external-phase mode. The motion layer (CreatureMotion) owns the clock,
+  161|    * every body-attitude channel (lift / squash / lean / pitch / yaw) and the
+  162|    * whole face; the animator writes ONLY the in-place gait cycle, the spine,
+  163|    * the arms and the secondary wobble. Entered by `setGait(amount, phase)`.
+  164|    */
+  165|   external = false;
+  166|   private externalPhase = 0;
+  167|   excited = 0;
+  168|   mood: Mood = 'neutral';
+  169|   driven = false;
+  170|   action: ActionId = 'none';
+  171|   actionW = 0;
+  172|   actionT = 0;
+  173|   locomotionW = 0;
+  174|   /** verification switch: kills every random source so two runs match exactly */
+  175|   deterministic = false;
+  176|   /** true while the player is holding this creature: petting or carrying */
+  177|   petted = false;
+  178|   held = false;
+  179| 
+  180|   drive: Drive = {
+  181|     speed: 0, lift: 0, squash: 1, yaw: 0, lean: 0, pitch: 0,
+  182|     stride: 0.3, heading: 0, groundY: null,
+  183|     slopePitch: 0, slopeRoll: 0, headLead: 0, eyeLead: 0, footTargets: [], footSwing: [],
+  184|   };
   185| 
-  186|   private legs: LegRig[] = [];
-  187|   private arms: ArmRig[] = [];
-  188|   private wiggles: Wiggle[] = [];
-  189|   private spine: THREE.Bone[] = [];
-  190|   private phase = 0;
-  191|   private t = Math.random() * 40;
-  192|   private blinkTimer = 1.6 + Math.random() * 2;
-  193|   private blinkT = 0;
-  194|   private blinkSide = 0;
-  195|   private doubleBlink = 0;
-  196|   private lookX = 0;
-  197|   private lookY = 0;
-  198|   private nextLook = 1;
-  199|   private gazeYaw = 0;
-  200|   private gazePitch = 0;
-  201|   private headPitch = 0;
-  202|   private headYawIdle = 0;
-  203|   private bodyYawTarget = 0;
-  204|   private bodyYaw = 0;
-  205|   private nextTurn = 2;
-  206|   private pupil = 1;
-  207|   private squash = 1;
-  208|   private squashV = 0;
-  209|   private hopY = 0;
-  210|   private hopV = 0;
-  211|   private lidClose = 0;
-  212|   private actionBlend = 0;
-  213|   private idleAct: IdleAct = 'none';
-  214|   private idleActT = 0;
-  215|   private idleActW = 0;
-  216|   private idleTimer = 3 + Math.random() * 4;
-  217|   /** a back leg kicks out while the creature is being petted */
-  218|   private kickT = 0;
-  219| 
-  220|   private _v = new THREE.Vector3();
-  221|   private _pole = new THREE.Vector3();
-  222|   private _q = new THREE.Quaternion();
-  223|   /** v18: reused, no per-frame Euler allocation */
-  224|   private _e = new THREE.Euler();
-  225| 
-  226|   constructor(template: HeroTemplate, handle: HeroHandle) {
-  227|     this.template = template;
-  228|     this.handle = handle;
-  229| 
-  230|     for (let i = 0; i < template.feet.length; i++) {
-  231|       const f = template.feet[i];
-  232|       const [hi, ki, ai] = f.chain;
-  233|       const hip = handle.bones[hi];
-  234|       const knee = handle.bones[ki];
-  235|       const ankle = handle.bones[ai];
-  236|       if (!hip || !knee || !ankle) continue;
-  237|       // ---- v9 pole, per leg, in creature space ---------------------------
-  238|       // A quadruped's REAR knees bend backward and its FRONT knees forward; a
-  239|       // hexapod's legs all bow OUTWARD; a biped keeps the pedestal's forward
-  240|       // pole. Locking this per leg is what stops the mirrored-branch flip.
-  241|       let poleLocal: THREE.Vector3;
-  242|       if (template.locomotion === 'skitter') {
-  243|         poleLocal = new THREE.Vector3(f.side >= 0 ? 1 : -1, 0, 0);
-  244|       } else if (template.feet.length === 4) {
-  245|         poleLocal = new THREE.Vector3(0, 0, f.plant.z < 0 ? -1 : 1);
-  246|       } else {
-  247|         poleLocal = new THREE.Vector3(0, 0, 1);
-  248|       }
-  249|       this.legs.push({
-  250|         hip, knee, ankle,
+  186|   /** Face parameters, all 0..1 unless noted. Written by the action layer. */
+  187|   face = { lid: 0, mouthOpen: 0, mouthWide: 1, blush: 0.35, pupil: 1, gazeSpin: 0 };
+  188| 
+  189|   private legs: LegRig[] = [];
+  190|   private arms: ArmRig[] = [];
+  191|   private wiggles: Wiggle[] = [];
+  192|   private spine: THREE.Bone[] = [];
+  193|   private phase = 0;
+  194|   private t = Math.random() * 40;
+  195|   private blinkTimer = 1.6 + Math.random() * 2;
+  196|   private blinkT = 0;
+  197|   private blinkSide = 0;
+  198|   private doubleBlink = 0;
+  199|   private lookX = 0;
+  200|   private lookY = 0;
+  201|   private nextLook = 1;
+  202|   private gazeYaw = 0;
+  203|   private gazePitch = 0;
+  204|   private headPitch = 0;
+  205|   private headYawIdle = 0;
+  206|   private bodyYawTarget = 0;
+  207|   private bodyYaw = 0;
+  208|   private nextTurn = 2;
+  209|   private pupil = 1;
+  210|   private squash = 1;
+  211|   private squashV = 0;
+  212|   private hopY = 0;
+  213|   private hopV = 0;
+  214|   private lidClose = 0;
+  215|   private actionBlend = 0;
+  216|   private idleAct: IdleAct = 'none';
+  217|   private idleActT = 0;
+  218|   private idleActW = 0;
+  219|   private idleTimer = 3 + Math.random() * 4;
+  220|   /** a back leg kicks out while the creature is being petted */
+  221|   private kickT = 0;
+  222| 
+  223|   private _v = new THREE.Vector3();
+  224|   private _pole = new THREE.Vector3();
+  225|   private _q = new THREE.Quaternion();
+  226|   /** v18: reused, no per-frame Euler allocation */
+  227|   private _e = new THREE.Euler();
+  228| 
+  229|   constructor(template: HeroTemplate, handle: HeroHandle) {
+  230|     this.template = template;
+  231|     this.handle = handle;
+  232| 
+  233|     for (let i = 0; i < template.feet.length; i++) {
+  234|       const f = template.feet[i];
+  235|       const [hi, ki, ai] = f.chain;
+  236|       const hip = handle.bones[hi];
+  237|       const knee = handle.bones[ki];
+  238|       const ankle = handle.bones[ai];
+  239|       if (!hip || !knee || !ankle) continue;
+  240|       // ---- v9 pole, per leg, in creature space ---------------------------
+  241|       // A quadruped's REAR knees bend backward and its FRONT knees forward; a
+  242|       // hexapod's legs all bow OUTWARD; a biped keeps the pedestal's forward
+  243|       // pole. Locking this per leg is what stops the mirrored-branch flip.
+  244|       let poleLocal: THREE.Vector3;
+  245|       if (template.locomotion === 'skitter') {
+  246|         poleLocal = new THREE.Vector3(f.side >= 0 ? 1 : -1, 0, 0);
+  247|       } else if (template.feet.length === 4) {
+  248|         poleLocal = new THREE.Vector3(0, 0, f.plant.z < 0 ? -1 : 1);
+  249|       } else {
+  250|         poleLocal = new THREE.Vector3(0, 0, 1);
