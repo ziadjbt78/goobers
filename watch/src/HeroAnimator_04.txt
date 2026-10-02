@@ -1,157 +1,179 @@
- 1001|   private _ft = new THREE.Vector3();
- 1002| 
- 1003|   private _wrapPi(a: number): number {
- 1004|     let d = a;
- 1005|     while (d > Math.PI) d -= Math.PI * 2;
- 1006|     while (d < -Math.PI) d += Math.PI * 2;
- 1007|     return d;
- 1008|   }
- 1009| 
- 1010|   private _vw = new THREE.Vector3();
- 1011| 
- 1012|   /** Height proxy used for the stride, set by the Agent; 1 for pedestal views. */
- 1013|   bulkScale = 1;
- 1014| 
- 1015|   /**
- 1016|    * The face. One place writes eyes, lids, brows, mouth and blush, so an
- 1017|    * expression can never half-apply.
- 1018|    */
- 1019|   private _updateFace(dt: number, act: number): void {
- 1020|     const h = this.handle;
- 1021|     const closed = this.blinkT > 0 ? Math.sin(Math.PI * (1 - this.blinkT)) : 0;
- 1022|     const f = this.face;
- 1023| 
- 1024|     const happy = this.mood === 'happy' ? 1 : 0;
- 1025|     const love = this.mood === 'love' ? 1 : 0;
- 1026|     const sad = this.mood === 'sad' ? 1 : 0;
- 1027|     const surprised = this.mood === 'surprised' || this.mood === 'scared' ? 1 : 0;
- 1028|     const sleepy = this.mood === 'sleepy' ? 1 : 0;
- 1029|     const dizzy = this.mood === 'dizzy' ? 1 : 0;
- 1030| 
- 1031|     // target face values, then blend — never a hard set
- 1032|     let lidT = f.lid;
- 1033|     let openT = f.mouthOpen;
- 1034|     let wideT = f.mouthWide;
- 1035|     let blushT = f.blush;
- 1036|     let pupT = 1;
- 1037|     let spinT = 0;
- 1038| 
- 1039|     if (this.petted) { lidT = 0.72; blushT = 1; pupT = 1.06; wideT = 1.15; openT = Math.max(openT, 0.25); }
- 1040|     if (this.held) { lidT = 0; blushT = 0.2; pupT = 1.35; openT = Math.max(openT, 0.75); wideT = 0.8; }
- 1041|     if (dizzy) { pupT = 0.7; spinT = 1; }
- 1042|     if (sleepy) { lidT = Math.max(lidT, 0.62); }
- 1043|     if (happy || love) { lidT = Math.max(lidT, 0.55); blushT = Math.max(blushT, 0.8); pupT = 1.08; openT = Math.max(openT, 0.35); }
- 1044|     if (surprised) { lidT = 0; pupT = 1.3; openT = Math.max(openT, 0.85); wideT = 0.85; }
- 1045|     if (sad) { lidT = Math.max(lidT, 0.28); pupT = 1.12; wideT = 0.85; }
- 1046|     if (this.action === 'chomp' || this.action === 'eat') {
- 1047|       const chew = 0.5 + 0.5 * Math.sin(this.actionT * 22);
- 1048|       openT = Math.max(openT, chew * 0.95);
- 1049|       wideT = 1.1;
- 1050|       blushT = Math.max(blushT, 0.55);
- 1051|     }
- 1052|     if (this.action === 'wave') { lidT = Math.max(lidT, 0.5); openT = Math.max(openT, 0.7); wideT = 1.2; }
- 1053|     if (this.idleAct === 'yawn' && this.idleActW > 0.2) { openT = Math.max(openT, 0.95 * this.idleActW); wideT = 0.9; lidT = Math.max(lidT, 0.75 * this.idleActW); }
- 1054|     if (this.idleAct === 'sniff' && this.idleActW > 0.2) { wideT = 0.8; }
- 1055| 
- 1056|     const k = Math.min(1, dt / 0.22);
- 1057|     f.lid += (lidT - f.lid) * k;
- 1058|     f.mouthOpen += (openT - f.mouthOpen) * k;
- 1059|     f.mouthWide += (wideT - f.mouthWide) * k;
- 1060|     f.blush += (blushT - f.blush) * k;
- 1061|     f.pupil += (pupT - f.pupil) * Math.min(1, dt * 6);
- 1062|     f.gazeSpin += (spinT - f.gazeSpin) * Math.min(1, dt * 4);
- 1063| 
- 1064|     this.pupil += ((1 + surprised * 0.10 - happy * 0.05 + (sleepy + dizzy) * -0.08) - this.pupil) * Math.min(1, dt * 5);
- 1065|     this.lidClose += (f.lid - this.lidClose) * Math.min(1, dt * 6);
- 1066| 
- 1067|     const dizzySpin = f.gazeSpin * this.t * 5.5;
- 1068|     for (const e of h.eyes) {
- 1069|       // a one-eyed wink, when the blink roll said so
- 1070|       const lid = this.blinkSide > 0 ? (e.side > 0 ? closed : 0)
- 1071|         : this.blinkSide < 0 ? (e.side < 0 ? closed : 0)
- 1072|           : closed;
- 1073|       e.lidPivot.rotation.x = -Math.PI * 0.5 + Math.max(0, Math.min(0.985, lid + this.lidClose)) * Math.PI * 0.98;
- 1074|       // eyes lead the head: the socket carries the gaze, the head carries the pose
- 1075|       const spinY = f.gazeSpin > 0.05 ? Math.cos(dizzySpin) * 0.45 * f.gazeSpin : 0;
- 1076|       const spinP = f.gazeSpin > 0.05 ? Math.sin(dizzySpin) * 0.35 * f.gazeSpin : 0;
- 1077|       e.socket.rotation.set(this.gazePitch + spinP, this.gazeYaw + spinY, f.gazeSpin * Math.sin(dizzySpin * 0.7) * 0.4);
- 1078|       const pup = this.pupil * f.pupil * (1 + surprised * 0.05);
- 1079|       e.pupil.scale.set(pup, pup * (1 - sad * 0.12), 1);
- 1080|       const browUp = surprised * 1.0 + sad * 0.45;
- 1081|       e.brow.visible = browUp > 0.08;
- 1082|       if (e.brow.visible) {
- 1083|         e.brow.position.y = e.radius * (0.92 + browUp * 0.20);
- 1084|         // angry/sad tilt: inner end up for sad, down for angry
- 1085|         e.brow.rotation.z = (sad * -0.30 + (this.mood === 'scared' ? 0.25 : 0)) * (e.side >= 0 ? 1 : -1);
- 1086|       }
- 1087|     }
+ 1001|     if (L.mode === 'swing') {
+ 1002|       L.swingT = Math.min(1, L.swingT + dt / Math.max(0.05, L.swingDur));
+ 1003|       plan((1 - L.swingT) * L.swingDur, this._tw);
+ 1004|       L.swingTo.lerp(this._tw, 1 - Math.exp(-dt / 0.05));
+ 1005|       const sT = L.swingT;
+ 1006|       const e = sT * sT * (3 - 2 * sT);
+ 1007|       out.lerpVectors(L.swingFrom, L.swingTo, e);
+ 1008|       const dd = Math.hypot(L.swingTo.x - L.swingFrom.x, L.swingTo.z - L.swingFrom.z);
+ 1009|       const k = reach / Math.max(1e-3, L.L1 + L.L2);
+ 1010|       const liftH = L.lift * k * Math.min(1, 0.35 + dd / stride);
+ 1011|       out.y = Math.max(out.y, gy(out.x, out.z)) + Math.sin(sT * Math.PI) * liftH;
+ 1012|       if (sT >= 1) { L.mode = 'plant'; L.landPending = true; L.landT = 0; L.lock.copy(out); }
+ 1013|       return;
+ 1014|     }
+ 1015|     L.lock.y += (gy(L.lock.x, L.lock.z) - L.lock.y) * Math.min(1, dt * 20);
+ 1016|     out.copy(L.lock);
+ 1017|   }
+ 1018| 
+ 1019|   private _kw = new THREE.Vector3();
+ 1020|   private _aw = new THREE.Vector3();
+ 1021|   private _rw = new THREE.Vector3();
+ 1022|   private _tw = new THREE.Vector3();
+ 1023|   private _ft = new THREE.Vector3();
+ 1024| 
+ 1025|   private _wrapPi(a: number): number {
+ 1026|     let d = a;
+ 1027|     while (d > Math.PI) d -= Math.PI * 2;
+ 1028|     while (d < -Math.PI) d += Math.PI * 2;
+ 1029|     return d;
+ 1030|   }
+ 1031| 
+ 1032|   private _vw = new THREE.Vector3();
+ 1033| 
+ 1034|   /** Height proxy used for the stride, set by the Agent; 1 for pedestal views. */
+ 1035|   bulkScale = 1;
+ 1036| 
+ 1037|   /**
+ 1038|    * The face. One place writes eyes, lids, brows, mouth and blush, so an
+ 1039|    * expression can never half-apply.
+ 1040|    */
+ 1041|   private _updateFace(dt: number, act: number): void {
+ 1042|     const h = this.handle;
+ 1043|     const closed = this.blinkT > 0 ? Math.sin(Math.PI * (1 - this.blinkT)) : 0;
+ 1044|     const f = this.face;
+ 1045| 
+ 1046|     const happy = this.mood === 'happy' ? 1 : 0;
+ 1047|     const love = this.mood === 'love' ? 1 : 0;
+ 1048|     const sad = this.mood === 'sad' ? 1 : 0;
+ 1049|     const surprised = this.mood === 'surprised' || this.mood === 'scared' ? 1 : 0;
+ 1050|     const sleepy = this.mood === 'sleepy' ? 1 : 0;
+ 1051|     const dizzy = this.mood === 'dizzy' ? 1 : 0;
+ 1052| 
+ 1053|     // target face values, then blend — never a hard set
+ 1054|     let lidT = f.lid;
+ 1055|     let openT = f.mouthOpen;
+ 1056|     let wideT = f.mouthWide;
+ 1057|     let blushT = f.blush;
+ 1058|     let pupT = 1;
+ 1059|     let spinT = 0;
+ 1060| 
+ 1061|     if (this.petted) { lidT = 0.72; blushT = 1; pupT = 1.06; wideT = 1.15; openT = Math.max(openT, 0.25); }
+ 1062|     if (this.held) { lidT = 0; blushT = 0.2; pupT = 1.35; openT = Math.max(openT, 0.75); wideT = 0.8; }
+ 1063|     if (dizzy) { pupT = 0.7; spinT = 1; }
+ 1064|     if (sleepy) { lidT = Math.max(lidT, 0.62); }
+ 1065|     if (happy || love) { lidT = Math.max(lidT, 0.55); blushT = Math.max(blushT, 0.8); pupT = 1.08; openT = Math.max(openT, 0.35); }
+ 1066|     if (surprised) { lidT = 0; pupT = 1.3; openT = Math.max(openT, 0.85); wideT = 0.85; }
+ 1067|     if (sad) { lidT = Math.max(lidT, 0.28); pupT = 1.12; wideT = 0.85; }
+ 1068|     if (this.action === 'chomp' || this.action === 'eat') {
+ 1069|       const chew = 0.5 + 0.5 * Math.sin(this.actionT * 22);
+ 1070|       openT = Math.max(openT, chew * 0.95);
+ 1071|       wideT = 1.1;
+ 1072|       blushT = Math.max(blushT, 0.55);
+ 1073|     }
+ 1074|     if (this.action === 'wave') { lidT = Math.max(lidT, 0.5); openT = Math.max(openT, 0.7); wideT = 1.2; }
+ 1075|     if (this.idleAct === 'yawn' && this.idleActW > 0.2) { openT = Math.max(openT, 0.95 * this.idleActW); wideT = 0.9; lidT = Math.max(lidT, 0.75 * this.idleActW); }
+ 1076|     if (this.idleAct === 'sniff' && this.idleActW > 0.2) { wideT = 0.8; }
+ 1077| 
+ 1078|     const k = Math.min(1, dt / 0.22);
+ 1079|     f.lid += (lidT - f.lid) * k;
+ 1080|     f.mouthOpen += (openT - f.mouthOpen) * k;
+ 1081|     f.mouthWide += (wideT - f.mouthWide) * k;
+ 1082|     f.blush += (blushT - f.blush) * k;
+ 1083|     f.pupil += (pupT - f.pupil) * Math.min(1, dt * 6);
+ 1084|     f.gazeSpin += (spinT - f.gazeSpin) * Math.min(1, dt * 4);
+ 1085| 
+ 1086|     this.pupil += ((1 + surprised * 0.10 - happy * 0.05 + (sleepy + dizzy) * -0.08) - this.pupil) * Math.min(1, dt * 5);
+ 1087|     this.lidClose += (f.lid - this.lidClose) * Math.min(1, dt * 6);
  1088| 
- 1089|     const open = f.mouthOpen;
- 1090|     h.mouthOpen.visible = open > 0.06;
- 1091|     h.mouth.visible = open <= 0.06;
- 1092|     if (h.mouthOpen.visible) {
- 1093|       const w = f.mouthWide;
- 1094|       // cheeks puff 20% on a chomp: the open mouth and the blush both swell
- 1095|       h.mouthOpen.scale.set(w * (1 + open * 0.15), (0.6 + open * 0.75) * (1 + open * 0.12), 1 * (1 + open * 0.2));
- 1096|     }
- 1097|     if (h.mouth.visible) {
- 1098|       h.mouth.scale.set(f.mouthWide, 1 - (1 - f.mouthWide) * 0.5 + (sad ? -0.25 : 0), 1);
- 1099|       h.mouth.rotation.z = -Math.PI * 0.5 - 1.55 * 0.5 + (sad ? 0.5 : 0);
- 1100|     }
- 1101|     for (const b of h.blush) b.scale.setScalar(0.85 + f.blush * 0.55 + open * 0.08);
- 1102|     void act;
- 1103|   }
- 1104| 
- 1105|   /** Per-species locomotion flavour, keyed off the template NAME: PIP and
- 1106|    *  MOCHI share the `walk` tag but must move completely differently. */
- 1107|   private _gaitFlavour(loco: number, speed01: number): { roll: number; spine: number; headPitch: number } {
- 1108|     const t = this.template;
- 1109|     if (loco <= 0.001) return { roll: 0, spine: 0, headPitch: 0 };
- 1110|     const s = Math.sin(this.phase * Math.PI * 2);
- 1111|     const key = (t.name || '').toUpperCase();
- 1112|     if (key.startsWith('PIP') || t.locomotion === 'walk') {
- 1113|       // PIP waddle: hard side-to-side sway, shoulders roll, head counter-sways
- 1114|       return { roll: s * 0.24 * loco * (0.45 + speed01 * 0.55), spine: 0.11 * loco, headPitch: 0 };
- 1115|     }
- 1116|     if (key.startsWith('MOCHI')) {
- 1117|       return { roll: Math.sin(this.phase * Math.PI * 4) * 0.05 * loco, spine: 0.19 * loco, headPitch: -0.05 * speed01 };
+ 1089|     const dizzySpin = f.gazeSpin * this.t * 5.5;
+ 1090|     for (const e of h.eyes) {
+ 1091|       // a one-eyed wink, when the blink roll said so
+ 1092|       const lid = this.blinkSide > 0 ? (e.side > 0 ? closed : 0)
+ 1093|         : this.blinkSide < 0 ? (e.side < 0 ? closed : 0)
+ 1094|           : closed;
+ 1095|       e.lidPivot.rotation.x = -Math.PI * 0.5 + Math.max(0, Math.min(0.985, lid + this.lidClose)) * Math.PI * 0.98;
+ 1096|       // eyes lead the head: the socket carries the gaze, the head carries the pose
+ 1097|       const spinY = f.gazeSpin > 0.05 ? Math.cos(dizzySpin) * 0.45 * f.gazeSpin : 0;
+ 1098|       const spinP = f.gazeSpin > 0.05 ? Math.sin(dizzySpin) * 0.35 * f.gazeSpin : 0;
+ 1099|       e.socket.rotation.set(this.gazePitch + spinP, this.gazeYaw + spinY, f.gazeSpin * Math.sin(dizzySpin * 0.7) * 0.4);
+ 1100|       const pup = this.pupil * f.pupil * (1 + surprised * 0.05);
+ 1101|       e.pupil.scale.set(pup, pup * (1 - sad * 0.12), 1);
+ 1102|       const browUp = surprised * 1.0 + sad * 0.45;
+ 1103|       e.brow.visible = browUp > 0.08;
+ 1104|       if (e.brow.visible) {
+ 1105|         e.brow.position.y = e.radius * (0.92 + browUp * 0.20);
+ 1106|         // angry/sad tilt: inner end up for sad, down for angry
+ 1107|         e.brow.rotation.z = (sad * -0.30 + (this.mood === 'scared' ? 0.25 : 0)) * (e.side >= 0 ? 1 : -1);
+ 1108|       }
+ 1109|     }
+ 1110| 
+ 1111|     const open = f.mouthOpen;
+ 1112|     h.mouthOpen.visible = open > 0.06;
+ 1113|     h.mouth.visible = open <= 0.06;
+ 1114|     if (h.mouthOpen.visible) {
+ 1115|       const w = f.mouthWide;
+ 1116|       // cheeks puff 20% on a chomp: the open mouth and the blush both swell
+ 1117|       h.mouthOpen.scale.set(w * (1 + open * 0.15), (0.6 + open * 0.75) * (1 + open * 0.12), 1 * (1 + open * 0.2));
  1118|     }
- 1119|     if (t.locomotion === 'skitter') {
- 1120|       // ZIK alternating-tripod: low body, quick shimmy, head holds still
- 1121|       return { roll: s * 0.07 * loco, spine: -0.05 * loco, headPitch: -0.06 * loco };
+ 1119|     if (h.mouth.visible) {
+ 1120|       h.mouth.scale.set(f.mouthWide, 1 - (1 - f.mouthWide) * 0.5 + (sad ? -0.25 : 0), 1);
+ 1121|       h.mouth.rotation.z = -Math.PI * 0.5 - 1.55 * 0.5 + (sad ? 0.5 : 0);
  1122|     }
- 1123|     if (t.locomotion === 'hop') return { roll: 0, spine: 0, headPitch: 0 };
- 1124|     return { roll: s * 0.08 * loco, spine: 0.09 * loco, headPitch: 0 };
+ 1123|     for (const b of h.blush) b.scale.setScalar(0.85 + f.blush * 0.55 + open * 0.08);
+ 1124|     void act;
  1125|   }
  1126| 
- 1127|   /** Additive action poses, all in body-local radians / metres. */
- 1128|   private _actionPose(id: ActionId, time: number): { pitch: number; lift: number; squash: number; roll: number } {
- 1129|     const e = Math.min(1, time / 0.22);
- 1130|     const osc = Math.sin(time * 9);
- 1131|     const R = { pitch: 0, lift: 0, squash: 1, roll: 0 };
- 1132|     switch (id) {
- 1133|       // eat: dip the head, then chomp — the mouth itself is driven by _updateFace
- 1134|       case 'eat': return { ...R, pitch: e * 0.40 + osc * 0.07, lift: -e * 0.03, squash: 1 + osc * 0.05 };
- 1135|       case 'chomp': return { ...R, pitch: e * 0.44 + Math.sin(time * 22) * 0.05, lift: -e * 0.03, squash: 1 + Math.sin(time * 22) * 0.055 };
- 1136|       case 'sniff': return { ...R, pitch: e * 0.46 + Math.sin(time * 7) * 0.07, lift: -e * 0.03, squash: 1 };
- 1137|       case 'play': return { ...R, pitch: -e * 0.12, lift: Math.abs(Math.sin(time * 5)) * e * 0.10, squash: 1 + Math.sin(time * 5) * 0.10, roll: Math.sin(time * 4) * 0.10 * e };
- 1138|       case 'pet': return { ...R, pitch: e * 0.14, lift: -e * 0.02, squash: 1 + Math.sin(time * 8) * 0.05 };
- 1139|       // roll onto the back: a big roll plus a drop, held for the stroke
- 1140|       case 'petRoll': {
- 1141|         const u = Math.min(1, time / 0.35);
- 1142|         return { pitch: -u * 0.55, lift: -u * 0.06, squash: 1 + Math.sin(time * 6) * 0.06, roll: u * 2.3 };
- 1143|       }
- 1144|       case 'sleep': return { ...R, pitch: e * 0.34, lift: -e * 0.07, squash: 1 - e * 0.08 };
- 1145|       case 'greet': return { ...R, pitch: -e * 0.10, lift: Math.abs(Math.sin(time * 7)) * e * 0.09, squash: 1 + Math.sin(time * 7) * 0.05 };
- 1146|       case 'wave': return { ...R, pitch: -e * 0.06, lift: Math.abs(Math.sin(time * 8)) * e * 0.05, squash: 1 };
- 1147|       case 'startle': return { ...R, pitch: -e * 0.22, lift: e * 0.07, squash: 1 - e * 0.08 };
- 1148|       case 'dig': return { ...R, pitch: e * 0.46 + Math.sin(time * 12) * 0.10, lift: -e * 0.04, squash: 1 };
- 1149|       case 'splash': return { ...R, pitch: e * 0.18, lift: Math.abs(Math.sin(time * 14)) * e * 0.05, squash: 1 };
- 1150|       case 'swim': return { ...R, pitch: e * 0.06, lift: Math.sin(time * 3) * e * 0.03, squash: 1 };
- 1151|       case 'fly': return { ...R, pitch: -e * 0.14, lift: Math.sin(time * 6) * e * 0.05, squash: 1 };
- 1152|       case 'perch': return { ...R, pitch: e * 0.06, squash: 1 };
- 1153|       case 'carry': return { ...R, pitch: Math.sin(time * 7) * 0.14, squash: 1.12, roll: Math.sin(time * 5) * 0.12 };
- 1154|       default: return R;
- 1155|     }
- 1156|   }
- 1157| }
+ 1127|   /** Per-species locomotion flavour, keyed off the template NAME: PIP and
+ 1128|    *  MOCHI share the `walk` tag but must move completely differently. */
+ 1129|   private _gaitFlavour(loco: number, speed01: number): { roll: number; spine: number; headPitch: number } {
+ 1130|     const t = this.template;
+ 1131|     if (loco <= 0.001) return { roll: 0, spine: 0, headPitch: 0 };
+ 1132|     const s = Math.sin(this.phase * Math.PI * 2);
+ 1133|     const key = (t.name || '').toUpperCase();
+ 1134|     if (key.startsWith('PIP') || t.locomotion === 'walk') {
+ 1135|       // PIP waddle: hard side-to-side sway, shoulders roll, head counter-sways
+ 1136|       return { roll: s * 0.24 * loco * (0.45 + speed01 * 0.55), spine: 0.11 * loco, headPitch: 0 };
+ 1137|     }
+ 1138|     if (key.startsWith('MOCHI')) {
+ 1139|       return { roll: Math.sin(this.phase * Math.PI * 4) * 0.05 * loco, spine: 0.19 * loco, headPitch: -0.05 * speed01 };
+ 1140|     }
+ 1141|     if (t.locomotion === 'skitter') {
+ 1142|       // ZIK alternating-tripod: low body, quick shimmy, head holds still
+ 1143|       return { roll: s * 0.07 * loco, spine: -0.05 * loco, headPitch: -0.06 * loco };
+ 1144|     }
+ 1145|     if (t.locomotion === 'hop') return { roll: 0, spine: 0, headPitch: 0 };
+ 1146|     return { roll: s * 0.08 * loco, spine: 0.09 * loco, headPitch: 0 };
+ 1147|   }
+ 1148| 
+ 1149|   /** Additive action poses, all in body-local radians / metres. */
+ 1150|   private _actionPose(id: ActionId, time: number): { pitch: number; lift: number; squash: number; roll: number } {
+ 1151|     const e = Math.min(1, time / 0.22);
+ 1152|     const osc = Math.sin(time * 9);
+ 1153|     const R = { pitch: 0, lift: 0, squash: 1, roll: 0 };
+ 1154|     switch (id) {
+ 1155|       // eat: dip the head, then chomp — the mouth itself is driven by _updateFace
+ 1156|       case 'eat': return { ...R, pitch: e * 0.40 + osc * 0.07, lift: -e * 0.03, squash: 1 + osc * 0.05 };
+ 1157|       case 'chomp': return { ...R, pitch: e * 0.44 + Math.sin(time * 22) * 0.05, lift: -e * 0.03, squash: 1 + Math.sin(time * 22) * 0.055 };
+ 1158|       case 'sniff': return { ...R, pitch: e * 0.46 + Math.sin(time * 7) * 0.07, lift: -e * 0.03, squash: 1 };
+ 1159|       case 'play': return { ...R, pitch: -e * 0.12, lift: Math.abs(Math.sin(time * 5)) * e * 0.10, squash: 1 + Math.sin(time * 5) * 0.10, roll: Math.sin(time * 4) * 0.10 * e };
+ 1160|       case 'pet': return { ...R, pitch: e * 0.14, lift: -e * 0.02, squash: 1 + Math.sin(time * 8) * 0.05 };
+ 1161|       // roll onto the back: a big roll plus a drop, held for the stroke
+ 1162|       case 'petRoll': {
+ 1163|         const u = Math.min(1, time / 0.35);
+ 1164|         return { pitch: -u * 0.55, lift: -u * 0.06, squash: 1 + Math.sin(time * 6) * 0.06, roll: u * 2.3 };
+ 1165|       }
+ 1166|       case 'sleep': return { ...R, pitch: e * 0.34, lift: -e * 0.07, squash: 1 - e * 0.08 };
+ 1167|       case 'greet': return { ...R, pitch: -e * 0.10, lift: Math.abs(Math.sin(time * 7)) * e * 0.09, squash: 1 + Math.sin(time * 7) * 0.05 };
+ 1168|       case 'wave': return { ...R, pitch: -e * 0.06, lift: Math.abs(Math.sin(time * 8)) * e * 0.05, squash: 1 };
+ 1169|       case 'startle': return { ...R, pitch: -e * 0.22, lift: e * 0.07, squash: 1 - e * 0.08 };
+ 1170|       case 'dig': return { ...R, pitch: e * 0.46 + Math.sin(time * 12) * 0.10, lift: -e * 0.04, squash: 1 };
+ 1171|       case 'splash': return { ...R, pitch: e * 0.18, lift: Math.abs(Math.sin(time * 14)) * e * 0.05, squash: 1 };
+ 1172|       case 'swim': return { ...R, pitch: e * 0.06, lift: Math.sin(time * 3) * e * 0.03, squash: 1 };
+ 1173|       case 'fly': return { ...R, pitch: -e * 0.14, lift: Math.sin(time * 6) * e * 0.05, squash: 1 };
+ 1174|       case 'perch': return { ...R, pitch: e * 0.06, squash: 1 };
+ 1175|       case 'carry': return { ...R, pitch: Math.sin(time * 7) * 0.14, squash: 1.12, roll: Math.sin(time * 5) * 0.12 };
+ 1176|       default: return R;
+ 1177|     }
+ 1178|   }
+ 1179| }
