@@ -232,19 +232,19 @@
   232|   rolled = false;
   233|   /** v14: an action has lifted the body off the ground: feet hang, then re-land */
   234|   hopping = false;
-  235|   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
-  236|   overstretchFrames = 0;
-  237|   private restBodyY = 0;
-  238| 
-  239|   /**
-  240|    * Build a rotation about a WORLD axis, expressed in `bone`'s parent space, so
-  241|    * a test pose swings the limb the same way no matter how that bone's rest
-  242|    * frame happens to be oriented.
-  243|    */
-  244|   private axisIn(bone: THREE.Object3D, x: number, z: number, ang: number): THREE.Quaternion {
-  245|     const axisWorld = new THREE.Vector3(x, 0, z);
-  246|     if (axisWorld.lengthSq() < 1e-9) axisWorld.set(1, 0, 0);
-  247|     axisWorld.normalize();
-  248|     const pw = (bone.parent ?? bone).getWorldQuaternion(new THREE.Quaternion());
-  249|     const axisLocal = axisWorld.applyQuaternion(pw.clone().invert()).normalize();
-  250|     return new THREE.Quaternion().setFromAxisAngle(axisLocal, ang);
+  235|   /** v15: legs an action is kicking / flailing / waving this frame (count as airborne) */
+  236|   private kicking = new Set<number>();
+  237|   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
+  238|   overstretchFrames = 0;
+  239|   private restBodyY = 0;
+  240| 
+  241|   /**
+  242|    * Build a rotation about a WORLD axis, expressed in `bone`'s parent space, so
+  243|    * a test pose swings the limb the same way no matter how that bone's rest
+  244|    * frame happens to be oriented.
+  245|    */
+  246|   private axisIn(bone: THREE.Object3D, x: number, z: number, ang: number): THREE.Quaternion {
+  247|     const axisWorld = new THREE.Vector3(x, 0, z);
+  248|     if (axisWorld.lengthSq() < 1e-9) axisWorld.set(1, 0, 0);
+  249|     axisWorld.normalize();
+  250|     const pw = (bone.parent ?? bone).getWorldQuaternion(new THREE.Quaternion());

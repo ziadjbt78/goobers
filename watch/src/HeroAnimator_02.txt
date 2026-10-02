@@ -1,250 +1,250 @@
-  501|       }
-  502|       this.headYawIdle = THREE.MathUtils.clamp(this.bodyYawTarget - this.bodyYaw, -0.55, 0.55) * 0.9;
-  503|       this.bodyYaw += (this.bodyYawTarget - this.bodyYaw) * Math.min(1, dt * 1.5);
-  504|       this.headPitch = 0;
-  505|     }
-  506|     const headLead = this.driven ? this.drive.headLead : this.headYawIdle;
-  507| 
-  508|     // ---- action layer -------------------------------------------------------
-  509|     let actionPitch = 0;
-  510|     let actionLift = 0;
-  511|     let actionSquash = 1;
-  512|     let actionRoll = 0;
-  513|     if (act > 0.001) {
-  514|       const a = this._actionPose(this.action, this.actionT);
-  515|       actionPitch = a.pitch; actionLift = a.lift; actionSquash = a.squash; actionRoll = a.roll;
-  516|     }
-  517| 
-  518|     // the Face map owns every face mesh in external mode (RigAdapter.setFace)
-  519|     if (!this.external) this._updateFace(dt, act);
-  520| 
-  521|     // ---- write the body ----------------------------------------------------
-  522|     const root = h.bones[0];
-  523|     const body = h.bones[t.bodyBone];
-  524|     const head = h.bones[t.headBone];
-  525|     const breathe = 1 + Math.sin(this.t * 2.4) * 0.02;
-  526|     const idle = Math.sin(this.t * 1.6) * 0.006;
-  527|     if (this.external) root.position.set(0, 0, 0);
-  528|     else if (!this.driven) root.position.set(0, bodyLift - idle * 0.5, 0);
-  529|     else root.position.set(0, bodyLift - idle * 0.5 + actionLift * act, 0);
-  530| 
-  531|     const style = this._gaitFlavour(loco, speed01);
-  532|     const roll = bodyRoll + style.roll + actionRoll * act;
-  533|     this._q.setFromEuler(new THREE.Euler(
-  534|       bodyPitch + actionPitch * act,
-  535|       this.bodyYaw + (this.driven ? headLead * 0.25 : 0),
-  536|       roll,
-  537|     ));
-  538|     body.quaternion.copy(this._q);
-  539| 
-  540|     const sq = this.squash * (1 + (actionSquash - 1) * act);
-  541|     body.scale.set(1 / Math.sqrt(Math.max(0.2, sq)), sq * breathe, 1 / Math.sqrt(Math.max(0.2, sq)));
-  542| 
-  543|     for (let i = 0; i < this.spine.length; i++) {
-  544|       const b = this.spine[i];
-  545|       const lag = i * 0.16;
-  546|       const w = Math.sin((this.phase - lag) * Math.PI * 2) * style.spine * (1 - i * 0.25);
-  547|       b.rotateX(w);
-  548|     }
-  549| 
-  550|     head.quaternion.setFromEuler(new THREE.Euler(
-  551|       this.headPitch - bodyPitch * 0.5 + style.headPitch - actionPitch * act * 0.6,
-  552|       headLead,
-  553|       0,
-  554|     ));
-  555| 
-  556|     // ---- feet --------------------------------------------------------------
-  557|     // v12: the World path solves its legs LAST (Agent -> solveWorldLegs), after
-  558|     // root, heading and body juice are final. Solving here, before those moved,
-  559|     // is what dragged planted feet and popped knees.
-  560|     if (!this.external) this._solveLegsPedestal(dt, moving);
-  561| 
-  562|     // ---- a petted creature kicks a back leg ---------------------------------
-  563|     if (this.legs.length > 0) {
-  564|       this.kickT = this.petted ? this.kickT + dt : 0;
-  565|       if (this.petted) {
-  566|         const back = this.legs[this.legs.length - 1];
-  567|         const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
-  568|         if (kick > 0.02) back.hip.rotateX(-kick);
-  569|       }
-  570|     }
-  571| 
-  572|     // ---- arms swing opposite the legs, and wave when greeting --------------
-  573|     for (const a of this.arms) {
-  574|       let sw = 0;
-  575|       if (loco > 0.01) sw = Math.sin(this.phase * Math.PI * 2 + (a.side > 0 ? Math.PI : 0)) * 0.52 * loco;
-  576|       if (this.action === 'wave' || this.action === 'greet') {
-  577|         sw += act * (a.side > 0 ? Math.sin(this.t * 13) * 0.9 + 0.7 : 0.1);
-  578|       }
-  579|       if (this.held) sw += Math.sin(this.t * 15 + a.side) * 0.55;
-  580|       a.upper.rotateX(sw);
-  581|       a.lower.rotateX(Math.max(0, -sw) * 0.5);
-  582|     }
-  583| 
-  584|     // ---- wobble springs on ears, tails, antennae ---------------------------
-  585|     const accel = this.driven ? this.drive.speed * 0.9 : this.gait * 0.6;
-  586|     const driveW = -this.bodyYaw * 0.6 + bodyPitch * 2.4 + (accel * 0.10 * Math.sin(this.phase * Math.PI * 4));
-  587|     for (const w of this.wiggles) {
-  588|       const extra = this.template.locomotion === 'skitter' ? Math.sin(this.t * 17 + w.gain) * 0.04 * loco : 0;
-  589|       const kick = this.mood === 'happy' ? Math.sin(this.t * 9) * 0.12 : 0;
-  590|       const x = w.w.step((driveW + kick) * w.gain, Math.min(dt, 1 / 60));
-  591|       w.bone.quaternion.setFromAxisAngle(w.axis === 'y' ? Y : X, x * 0.9 + extra);
-  592|     }
-  593|   }
-  594| 
-  595| 
-  596|   /**
-  597|    * v10 — world-space foot planting for the World path.
-  598|    *
-  599|    * The pedestal cycle moves a body-space target, which is why a planted foot
-  600|    * used to travel with the body (25 cm of slide). Here the foot is instead
-  601|    * pinned to a WORLD point for its whole stance, and the swing is a
-  602|    * predicted-arc step to the next plant. Guards force an early lift before
-  603|    * anything can overstretch or slide: leg reach, rest-offset error, turn
-  604|    * error, and idle body drift.
-  605|    */
-  606|   /** Pedestal / driven leg solve, moved here VERBATIM from update(). */
-  607|   private _solveLegsPedestal(dt: number, moving: number): void {
-  608|     const h = this.handle;
-  609|     // ---- feet --------------------------------------------------------------
-  610|     if (this.legs.length > 0) {
-  611|       h.group.updateMatrixWorld(true);
-  612|       const world = new THREE.Matrix4().copy(h.group.matrixWorld);
-  613|       // The IK pole must live in the CREATURE's frame, not the world's: a knee
-  614|       // that always bends toward world +Z folds backwards the moment the
-  615|       // creature faces any other way. On a pedestal the creature never turns,
-  616|       // so the pole stays exactly the old world +Z and the baseline holds.
-  617|       const drivenRig = this.driven || this.external;
-  618|       const groupWorldQuat = drivenRig ? h.group.getWorldQuaternion(this._q) : null;
-  619|       for (let i = 0; i < this.legs.length; i++) {
-  620|         const L = this.legs[i];
-  621|         if (drivenRig && groupWorldQuat) {
-  622|           // per-leg pole in creature space, rotated into the world, then eased.
-  623|           // An unsmoothed pole that grazes the limb axis is exactly what makes a
-  624|           // two-bone solve flip; the ease removes that.
-  625|           this._pole.copy(L.poleLocal).applyQuaternion(groupWorldQuat);
-  626|           if (L.poleSm.lengthSq() < 1e-6) L.poleSm.copy(this._pole);
-  627|           else L.poleSm.lerp(this._pole, 1 - Math.exp(-dt / 0.08)).normalize();
-  628|           this._pole.copy(L.poleSm);
-  629|         } else {
-  630|           this._pole.set(0, 0, 1);
-  631|         }
-  632|         const target = new THREE.Vector3();
-  633|         if (this.external) {
-  634|           // v10 WORLD PLANTING: the foot is pinned to a world point for the
-  635|           // whole stance, so it cannot slide. See _worldFootTarget.
-  636|           this._worldFootTarget(L, target, dt);
-  637|         } else if (this.driven && this.drive.footTargets[L.index]) {
-  638|           target.copy(this.drive.footTargets[L.index]);
-  639|         } else {
-  640|           const u = (this.phase + L.phase) % 1;
-  641|           let zOff = 0;
-  642|           let yOff = 0;
-  643|           if (moving > 0) {
-  644|             if (u < 0.5) zOff = (0.5 - u * 2) * L.step;
-  645|             else {
-  646|               const s = (u - 0.5) * 2;
-  647|               zOff = (s * 2 - 1) * L.step * 0.5;
-  648|               yOff = Math.sin(s * Math.PI) * L.lift;
-  649|             }
-  650|           }
-  651|           target.set(L.plant.x, L.plant.y + yOff * moving, L.plant.z + zOff * moving);
-  652|           target.applyMatrix4(world);
-  653|         }
-  654|         solveLeg({
-  655|           hip: L.hip, knee: L.knee, ankle: L.ankle,
-  656|           targetWorld: target,
-  657|           poleWorld: this._pole,
-  658|           prevKnee: L.kneeLocal,
-  659|         });
-  660|         // A two-bone solve flips branch when the pole crosses the limb axis, and
-  661|         // a splayed insect leg does that constantly. An airborne leg is capped
-  662|         // at 12 rad/s so a flip reads as a fast move, never a pop. Planted legs
-  663|         // are exempt, so foot slip stays exactly zero.
-  664|         //
-  665|         // v9: EXTERNAL mode derives the swing from the external cycle itself,
-  666|         // and the plant-transition frame counts as airborne (that is the frame
-  667|         // the solve is most prone to snap on).
-  668|         const airborne = this.external ? L.mode === 'swing' : false;
-  669|         const swingNow = this.external
-  670|           ? (airborne || L.wasSwing)
-  671|           : !!(this.driven && this.drive.footSwing[L.index]);
-  672|         if (this.external) L.wasSwing = airborne;
-  673|         if ((this.driven || this.external) && swingNow) {
-  674|           const maxD = LEG_RATE * dt;
-  675|           for (let k = 0; k < 3; k++) {
-  676|             const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
-  677|             const q = L.prev[k];
-  678|             const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
-  679|             if (ang > maxD && ang > 1e-6) {
-  680|               _lim.copy(bone.quaternion);
-  681|               bone.quaternion.copy(q).slerp(_lim, maxD / ang);
-  682|             }
-  683|           }
-  684|         }
-  685|         L.prev[0].copy(L.hip.quaternion);
-  686|         L.prev[1].copy(L.knee.quaternion);
-  687|         L.prev[2].copy(L.ankle.quaternion);
-  688|       }
-  689|       void world;
-  690|     }
-  691| 
-  692|   }
-  693| 
-  694|   private _hips: Set<THREE.Object3D> | null = null;
-  695|   /** v12: the hip bones the leg IK owns, so the Agent can preserve additive limb poses. */
-  696|   legHips(): Set<THREE.Object3D> {
-  697|     if (!this._hips) this._hips = new Set(this.legs.map((l) => l.hip));
-  698|     return this._hips;
-  699|   }
-  700| 
-  701|   /**
-  702|    * v12 World leg solve. Called by the Agent AFTER the motion layer has written
-  703|    * the final root position, heading and body juice for this frame, so a planted
-  704|    * foot is solved against the body it is actually attached to.
-  705|    * `free` = held / airborne: nothing plants, locks re-seed on landing.
-  706|    */
-  707|   /** v13: world-units drop of the skeleton root that keeps every hip inside its leg */
-  708|   crouch = 0;
-  709|   /** v14: legs hang free this frame (held, rolled, mid-jump) */
-  710|   legsFree = false;
-  711|   liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 };
-  712|   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
-  713| 
-  714|   solveWorldLegs(dt: number, free: boolean): void {
-  715|     if (!this.external || this.legs.length === 0) return;
-  716|     void this._wrapPi;
-  717|     this.legsFree = free;
-  718|     if (free) {
-  719|       for (const L of this.legs) { L.init = false; L.mode = 'plant'; L.err = 0; L.postErr = 0; }
-  720|       this.crouch *= Math.exp(-dt / 0.2);
-  721|       return;
-  722|     }
-  723|     const h = this.handle;
-  724|     h.group.updateMatrixWorld(true);
+  501|       this.nextTurn -= dt;
+  502|       if (this.nextTurn <= 0) {
+  503|         this.nextTurn = 1.6 + Math.random() * 3;
+  504|         this.bodyYawTarget = this.deterministic ? 0 : (Math.random() - 0.5) * 0.55;
+  505|       }
+  506|       this.headYawIdle = THREE.MathUtils.clamp(this.bodyYawTarget - this.bodyYaw, -0.55, 0.55) * 0.9;
+  507|       this.bodyYaw += (this.bodyYawTarget - this.bodyYaw) * Math.min(1, dt * 1.5);
+  508|       this.headPitch = 0;
+  509|     }
+  510|     const headLead = this.driven ? this.drive.headLead : this.headYawIdle;
+  511| 
+  512|     // ---- action layer -------------------------------------------------------
+  513|     let actionPitch = 0;
+  514|     let actionLift = 0;
+  515|     let actionSquash = 1;
+  516|     let actionRoll = 0;
+  517|     if (act > 0.001) {
+  518|       const a = this._actionPose(this.action, this.actionT);
+  519|       actionPitch = a.pitch; actionLift = a.lift; actionSquash = a.squash; actionRoll = a.roll;
+  520|     }
+  521| 
+  522|     // the Face map owns every face mesh in external mode (RigAdapter.setFace)
+  523|     if (!this.external) this._updateFace(dt, act);
+  524| 
+  525|     // ---- write the body ----------------------------------------------------
+  526|     const root = h.bones[0];
+  527|     const body = h.bones[t.bodyBone];
+  528|     const head = h.bones[t.headBone];
+  529|     const breathe = 1 + Math.sin(this.t * 2.4) * 0.02;
+  530|     const idle = Math.sin(this.t * 1.6) * 0.006;
+  531|     if (this.external) root.position.set(0, 0, 0);
+  532|     else if (!this.driven) root.position.set(0, bodyLift - idle * 0.5, 0);
+  533|     else root.position.set(0, bodyLift - idle * 0.5 + actionLift * act, 0);
+  534| 
+  535|     const style = this._gaitFlavour(loco, speed01);
+  536|     const roll = bodyRoll + style.roll + actionRoll * act;
+  537|     this._q.setFromEuler(new THREE.Euler(
+  538|       bodyPitch + actionPitch * act,
+  539|       this.bodyYaw + (this.driven ? headLead * 0.25 : 0),
+  540|       roll,
+  541|     ));
+  542|     body.quaternion.copy(this._q);
+  543| 
+  544|     const sq = this.squash * (1 + (actionSquash - 1) * act);
+  545|     body.scale.set(1 / Math.sqrt(Math.max(0.2, sq)), sq * breathe, 1 / Math.sqrt(Math.max(0.2, sq)));
+  546| 
+  547|     for (let i = 0; i < this.spine.length; i++) {
+  548|       const b = this.spine[i];
+  549|       const lag = i * 0.16;
+  550|       const w = Math.sin((this.phase - lag) * Math.PI * 2) * style.spine * (1 - i * 0.25);
+  551|       b.rotateX(w);
+  552|     }
+  553| 
+  554|     head.quaternion.setFromEuler(new THREE.Euler(
+  555|       this.headPitch - bodyPitch * 0.5 + style.headPitch - actionPitch * act * 0.6,
+  556|       headLead,
+  557|       0,
+  558|     ));
+  559| 
+  560|     // ---- feet --------------------------------------------------------------
+  561|     // v12: the World path solves its legs LAST (Agent -> solveWorldLegs), after
+  562|     // root, heading and body juice are final. Solving here, before those moved,
+  563|     // is what dragged planted feet and popped knees.
+  564|     if (!this.external) this._solveLegsPedestal(dt, moving);
+  565| 
+  566|     // ---- a petted creature kicks a back leg ---------------------------------
+  567|     if (this.legs.length > 0) {
+  568|       this.kickT = this.petted ? this.kickT + dt : 0;
+  569|       if (this.petted) {
+  570|         const back = this.legs[this.legs.length - 1];
+  571|         const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
+  572|         if (kick > 0.02) back.hip.rotateX(-kick);
+  573|       }
+  574|     }
+  575| 
+  576|     // ---- arms swing opposite the legs, and wave when greeting --------------
+  577|     for (const a of this.arms) {
+  578|       let sw = 0;
+  579|       if (loco > 0.01) sw = Math.sin(this.phase * Math.PI * 2 + (a.side > 0 ? Math.PI : 0)) * 0.52 * loco;
+  580|       if (this.action === 'wave' || this.action === 'greet') {
+  581|         sw += act * (a.side > 0 ? Math.sin(this.t * 13) * 0.9 + 0.7 : 0.1);
+  582|       }
+  583|       if (this.held) sw += Math.sin(this.t * 15 + a.side) * 0.55;
+  584|       a.upper.rotateX(sw);
+  585|       a.lower.rotateX(Math.max(0, -sw) * 0.5);
+  586|     }
+  587| 
+  588|     // ---- wobble springs on ears, tails, antennae ---------------------------
+  589|     const accel = this.driven ? this.drive.speed * 0.9 : this.gait * 0.6;
+  590|     const driveW = -this.bodyYaw * 0.6 + bodyPitch * 2.4 + (accel * 0.10 * Math.sin(this.phase * Math.PI * 4));
+  591|     for (const w of this.wiggles) {
+  592|       const extra = this.template.locomotion === 'skitter' ? Math.sin(this.t * 17 + w.gain) * 0.04 * loco : 0;
+  593|       const kick = this.mood === 'happy' ? Math.sin(this.t * 9) * 0.12 : 0;
+  594|       const x = w.w.step((driveW + kick) * w.gain, Math.min(dt, 1 / 60));
+  595|       w.bone.quaternion.setFromAxisAngle(w.axis === 'y' ? Y : X, x * 0.9 + extra);
+  596|     }
+  597|   }
+  598| 
+  599| 
+  600|   /**
+  601|    * v10 — world-space foot planting for the World path.
+  602|    *
+  603|    * The pedestal cycle moves a body-space target, which is why a planted foot
+  604|    * used to travel with the body (25 cm of slide). Here the foot is instead
+  605|    * pinned to a WORLD point for its whole stance, and the swing is a
+  606|    * predicted-arc step to the next plant. Guards force an early lift before
+  607|    * anything can overstretch or slide: leg reach, rest-offset error, turn
+  608|    * error, and idle body drift.
+  609|    */
+  610|   /** Pedestal / driven leg solve, moved here VERBATIM from update(). */
+  611|   private _solveLegsPedestal(dt: number, moving: number): void {
+  612|     const h = this.handle;
+  613|     // ---- feet --------------------------------------------------------------
+  614|     if (this.legs.length > 0) {
+  615|       h.group.updateMatrixWorld(true);
+  616|       const world = new THREE.Matrix4().copy(h.group.matrixWorld);
+  617|       // The IK pole must live in the CREATURE's frame, not the world's: a knee
+  618|       // that always bends toward world +Z folds backwards the moment the
+  619|       // creature faces any other way. On a pedestal the creature never turns,
+  620|       // so the pole stays exactly the old world +Z and the baseline holds.
+  621|       const drivenRig = this.driven || this.external;
+  622|       const groupWorldQuat = drivenRig ? h.group.getWorldQuaternion(this._q) : null;
+  623|       for (let i = 0; i < this.legs.length; i++) {
+  624|         const L = this.legs[i];
+  625|         if (drivenRig && groupWorldQuat) {
+  626|           // per-leg pole in creature space, rotated into the world, then eased.
+  627|           // An unsmoothed pole that grazes the limb axis is exactly what makes a
+  628|           // two-bone solve flip; the ease removes that.
+  629|           this._pole.copy(L.poleLocal).applyQuaternion(groupWorldQuat);
+  630|           if (L.poleSm.lengthSq() < 1e-6) L.poleSm.copy(this._pole);
+  631|           else L.poleSm.lerp(this._pole, 1 - Math.exp(-dt / 0.08)).normalize();
+  632|           this._pole.copy(L.poleSm);
+  633|         } else {
+  634|           this._pole.set(0, 0, 1);
+  635|         }
+  636|         const target = new THREE.Vector3();
+  637|         if (this.external) {
+  638|           // v10 WORLD PLANTING: the foot is pinned to a world point for the
+  639|           // whole stance, so it cannot slide. See _worldFootTarget.
+  640|           this._worldFootTarget(L, target, dt);
+  641|         } else if (this.driven && this.drive.footTargets[L.index]) {
+  642|           target.copy(this.drive.footTargets[L.index]);
+  643|         } else {
+  644|           const u = (this.phase + L.phase) % 1;
+  645|           let zOff = 0;
+  646|           let yOff = 0;
+  647|           if (moving > 0) {
+  648|             if (u < 0.5) zOff = (0.5 - u * 2) * L.step;
+  649|             else {
+  650|               const s = (u - 0.5) * 2;
+  651|               zOff = (s * 2 - 1) * L.step * 0.5;
+  652|               yOff = Math.sin(s * Math.PI) * L.lift;
+  653|             }
+  654|           }
+  655|           target.set(L.plant.x, L.plant.y + yOff * moving, L.plant.z + zOff * moving);
+  656|           target.applyMatrix4(world);
+  657|         }
+  658|         solveLeg({
+  659|           hip: L.hip, knee: L.knee, ankle: L.ankle,
+  660|           targetWorld: target,
+  661|           poleWorld: this._pole,
+  662|           prevKnee: L.kneeLocal,
+  663|         });
+  664|         // A two-bone solve flips branch when the pole crosses the limb axis, and
+  665|         // a splayed insect leg does that constantly. An airborne leg is capped
+  666|         // at 12 rad/s so a flip reads as a fast move, never a pop. Planted legs
+  667|         // are exempt, so foot slip stays exactly zero.
+  668|         //
+  669|         // v9: EXTERNAL mode derives the swing from the external cycle itself,
+  670|         // and the plant-transition frame counts as airborne (that is the frame
+  671|         // the solve is most prone to snap on).
+  672|         const airborne = this.external ? L.mode === 'swing' : false;
+  673|         const swingNow = this.external
+  674|           ? (airborne || L.wasSwing)
+  675|           : !!(this.driven && this.drive.footSwing[L.index]);
+  676|         if (this.external) L.wasSwing = airborne;
+  677|         if ((this.driven || this.external) && swingNow) {
+  678|           const maxD = LEG_RATE * dt;
+  679|           for (let k = 0; k < 3; k++) {
+  680|             const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
+  681|             const q = L.prev[k];
+  682|             const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
+  683|             if (ang > maxD && ang > 1e-6) {
+  684|               _lim.copy(bone.quaternion);
+  685|               bone.quaternion.copy(q).slerp(_lim, maxD / ang);
+  686|             }
+  687|           }
+  688|         }
+  689|         L.prev[0].copy(L.hip.quaternion);
+  690|         L.prev[1].copy(L.knee.quaternion);
+  691|         L.prev[2].copy(L.ankle.quaternion);
+  692|       }
+  693|       void world;
+  694|     }
+  695| 
+  696|   }
+  697| 
+  698|   private _hips: Set<THREE.Object3D> | null = null;
+  699|   /** v12: the hip bones the leg IK owns, so the Agent can preserve additive limb poses. */
+  700|   /** v15: template foot index of the leg whose hip is `b`, or -1. */
+  701|   legIndexOfHip(b: THREE.Object3D): number {
+  702|     const L = this.legs.find((l) => l.hip === b);
+  703|     return L ? L.index : -1;
+  704|   }
+  705| 
+  706|   private _restQ: THREE.Quaternion[][] | null = null;
+  707|   private _pq = new THREE.Quaternion();
+  708|   private _iq = new THREE.Quaternion();
+  709| 
+  710|   /** v15: rate-limit all three bones of a leg against last frame, then remember them. */
+  711|   private _limitLeg(L: LegRig, maxD: number): void {
+  712|     for (let k = 0; k < 3; k++) {
+  713|       const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
+  714|       const q = L.prev[k];
+  715|       const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
+  716|       if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
+  717|       q.copy(bone.quaternion);
+  718|     }
+  719|   }
+  720| 
+  721|   legHips(): Set<THREE.Object3D> {
+  722|     if (!this._hips) this._hips = new Set(this.legs.map((l) => l.hip));
+  723|     return this._hips;
+  724|   }
   725| 
-  726|     // v13 CROUCH: stubby legs plus the cartoon bob put the hips higher than the
-  727|     // legs can reach, so a planted foot had zero horizontal room and HAD to slide.
-  728|     // Drop the skeleton root just enough that every hip sits inside its leg.
-  729|     const ground = this.drive.groundY;
-  730|     const kH = 0.92 - 0.12 * Math.min(1, Math.max(0, this.locomotionW));
-  731|     let need = 0;
-  732|     for (const L of this.legs) {
-  733|       const hip = L.hip.getWorldPosition(this._vw);
-  734|       const knee = L.knee.getWorldPosition(this._kw);
-  735|       const ank = L.ankle.getWorldPosition(this._aw);
-  736|       L.reachW = hip.distanceTo(knee) + knee.distanceTo(ank);
-  737|       this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(h.group.matrixWorld);
-  738|       const gy = (ground ? ground(this._rw.x, this._rw.z) : h.group.position.y) + L.plant.y;
-  739|       need = Math.max(need, Math.min(0.5 * L.reachW, hip.y - gy - kH * L.reachW));
-  740|     }
-  741|     this.crouch = need > this.crouch ? need : this.crouch + (need - this.crouch) * Math.min(1, dt / 0.25);
-  742|     if (this.crouch > 1e-5) {
-  743|       const root = h.bones[0];
-  744|       const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
-  745|       root.position.y -= this.crouch / Math.max(1e-4, ps);
-  746|       h.group.updateMatrixWorld(true);
-  747|     }
-  748| 
-  749|     const gq = h.group.getWorldQuaternion(this._q);
-  750|     for (const L of this.legs) {
+  726|   /**
+  727|    * v12 World leg solve. Called by the Agent AFTER the motion layer has written
+  728|    * the final root position, heading and body juice for this frame, so a planted
+  729|    * foot is solved against the body it is actually attached to.
+  730|    * `free` = held / airborne: nothing plants, locks re-seed on landing.
+  731|    */
+  732|   /** v13: world-units drop of the skeleton root that keeps every hip inside its leg */
+  733|   crouch = 0;
+  734|   /** v14: legs hang free this frame (held, rolled, mid-jump) */
+  735|   legsFree = false;
+  736|   liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 };
+  737|   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
+  738| 
+  739|   solveWorldLegs(dt: number, free: boolean): void {
+  740|     if (!this.external || this.legs.length === 0) return;
+  741|     void this._wrapPi;
+  742|     const restQ = this._restQ ?? (this._restQ = this.legs.map((L) => [L.knee.quaternion.clone(), L.ankle.quaternion.clone()]));
+  743|     this.legsFree = free;
+  744|     if (free) {
+  745|       // v15: hanging legs EASE, never snap. Hips keep the motion layer's pose
+  746|       // (dangle flail), knees/ankles relax toward rest at the swing rate, and the
+  747|       // crouch stays applied (decaying) so the body cannot pop up.
+  748|       const hf = this.handle;
+  749|       this.crouch *= Math.exp(-dt / 0.2);
+  750|       if (this.crouch > 1e-5) {
