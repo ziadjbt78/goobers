@@ -34,3 +34,6 @@ textures or animation clips: everything is procedural code.
   "What's new" on each delivery. Keep PROGRESS.md current.
 - Motion must read instantly: anticipation, 15-30% squash and stretch,
   overshoot, follow-through.
+
+## Start here
+Read docs/HANDOFF.md first: workflow, status, next batch.
