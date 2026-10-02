@@ -232,6 +232,8 @@ export class Agent implements HashEntry {
   rolled = false;
   /** v14: an action has lifted the body off the ground: feet hang, then re-land */
   hopping = false;
+  /** v15: legs an action is kicking / flailing / waving this frame (count as airborne) */
+  private kicking = new Set<number>();
   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
   overstretchFrames = 0;
   private restBodyY = 0;
@@ -324,7 +326,9 @@ export class Agent implements HashEntry {
       // reading only rotation.z silently discarded every pitch the motion
       // layer applied, which is why the G-key pitch probe read 0.0000 m.
       this.rolled = 2 * Math.acos(Math.min(1, Math.abs(pivot.quaternion.w))) > 0.6;
-      this.hopping = this.motion.busy && pivot.position.y > 0.05 * this.bulk;
+      // v15: hysteresis, so a bouncy action cannot flicker the feet free/planted
+      const py = pivot.position.y;
+      this.hopping = this.motion.busy && (this.hopping ? py > 0.025 * this.bulk : py > 0.06 * this.bulk);
       if (pivot.quaternion.x || pivot.quaternion.y || pivot.quaternion.z) {
         body.quaternion.multiply(pivot.quaternion);
       }
@@ -342,10 +346,16 @@ export class Agent implements HashEntry {
     }
     const free = this.carried || this.rolled || this.hopping || this.motion.dangle.active || this.motion.dangle.airborne;
     this.hero.solveWorldLegs(dt, free);
+    this.kicking.clear();
     if (!free) {
       for (let i = 0; i < rl.length; i++) {
         const dq = this.legDelta[i];
-        if (dq && hips.has(rl[i]) && Math.abs(dq.w) < 0.999999) rl[i].quaternion.multiply(dq);
+        if (!dq || !hips.has(rl[i])) continue;
+        const ang = 2 * Math.acos(Math.min(1, Math.abs(dq.w)));
+        if (ang < 1e-3) continue;
+        rl[i].quaternion.multiply(dq);
+        // a visible kick / flail / wave lifts that foot: it is airborne, not sliding
+        if (ang > 0.05) { const li = this.hero.legIndexOfHip(rl[i]); if (li >= 0) this.kicking.add(li); }
       }
     }
 
@@ -379,7 +389,7 @@ export class Agent implements HashEntry {
       // the stance/swing flag now comes from the real world-planting solver
       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
       const leg = legs?.find((l) => l.index === i);
-      const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree;
+      const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree || this.kicking.has(i);
       f.swinging = swinging;
       f.swing = 0;
       if (!swinging && hipBone && kneeBone && bone) {

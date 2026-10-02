@@ -135,3 +135,10 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - Feet hang free when an action lifts the body (> 5% height); free feet count as airborne, landing fires dust.
 - Joint gate now measures leg bones only (hip/knee/ankle, with plant/swing tag).
 - watch: SLIP FORENSICS section (action vs walk, one-frame pop vs creep, forced lift, reach ratio, IK miss before/after limiter).
+
+
+## v15 (2026-10-02 13:29): Batch 4, action transitions
+- Free legs ease (knee/ankle -> rest at LEG_RATE, hip keeps dangle pose), crouch persists while hanging: no 185 rad/s free pop.
+- Re-landing swings from the real ankle instead of teleporting the lock. Hop hysteresis 6% on / 2.5% off.
+- Choreo kick/flail/wave on a planted hip marks that foot airborne.
+- IK pole rides the hip's parent (body) so action pitch/roll cannot flip the knee branch.

@@ -130,6 +130,10 @@ interface LegRig {
   reachW: number;
   /** v14: ankle miss AFTER the rate limiter (limiter lag shows up here) */
   postErr: number;
+  /** v15: legs were hanging free; next planted frame swings in from the real ankle */
+  relaunch: boolean;
+  /** v15: rest rotation of the hip's parent relative to the creature, for a body-space pole */
+  parRel: THREE.Quaternion | null;
 }
 
 interface ArmRig { upper: THREE.Bone; lower: THREE.Bone; side: number }
@@ -247,7 +251,7 @@ export class HeroAnimator {
         bodyAtPlant: new THREE.Vector3(),
         L1: knee.position.length(), L2: ankle.position.length(),
         restAngle: Math.atan2(f.plant.x, f.plant.z), forced: false,
-        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0, postErr: 0,
+        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0, postErr: 0, relaunch: false, parRel: null,
       });
       this.drive.footTargets.push(f.plant.clone());
       this.drive.footSwing.push(false);
@@ -693,6 +697,27 @@ export class HeroAnimator {
 
   private _hips: Set<THREE.Object3D> | null = null;
   /** v12: the hip bones the leg IK owns, so the Agent can preserve additive limb poses. */
+  /** v15: template foot index of the leg whose hip is `b`, or -1. */
+  legIndexOfHip(b: THREE.Object3D): number {
+    const L = this.legs.find((l) => l.hip === b);
+    return L ? L.index : -1;
+  }
+
+  private _restQ: THREE.Quaternion[][] | null = null;
+  private _pq = new THREE.Quaternion();
+  private _iq = new THREE.Quaternion();
+
+  /** v15: rate-limit all three bones of a leg against last frame, then remember them. */
+  private _limitLeg(L: LegRig, maxD: number): void {
+    for (let k = 0; k < 3; k++) {
+      const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
+      const q = L.prev[k];
+      const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
+      if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
+      q.copy(bone.quaternion);
+    }
+  }
+
   legHips(): Set<THREE.Object3D> {
     if (!this._hips) this._hips = new Set(this.legs.map((l) => l.hip));
     return this._hips;
@@ -714,10 +739,27 @@ export class HeroAnimator {
   solveWorldLegs(dt: number, free: boolean): void {
     if (!this.external || this.legs.length === 0) return;
     void this._wrapPi;
+    const restQ = this._restQ ?? (this._restQ = this.legs.map((L) => [L.knee.quaternion.clone(), L.ankle.quaternion.clone()]));
     this.legsFree = free;
     if (free) {
-      for (const L of this.legs) { L.init = false; L.mode = 'plant'; L.err = 0; L.postErr = 0; }
+      // v15: hanging legs EASE, never snap. Hips keep the motion layer's pose
+      // (dangle flail), knees/ankles relax toward rest at the swing rate, and the
+      // crouch stays applied (decaying) so the body cannot pop up.
+      const hf = this.handle;
       this.crouch *= Math.exp(-dt / 0.2);
+      if (this.crouch > 1e-5) {
+        const root = hf.bones[0];
+        const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
+        root.position.y -= this.crouch / Math.max(1e-4, ps);
+      }
+      const maxF = LEG_RATE * dt;
+      for (let li = 0; li < this.legs.length; li++) {
+        const L = this.legs[li];
+        L.relaunch = true; L.mode = 'plant'; L.err = 0; L.postErr = 0;
+        L.knee.quaternion.copy(restQ[li][0]);
+        L.ankle.quaternion.copy(restQ[li][1]);
+        this._limitLeg(L, maxF);
+      }
       return;
     }
     const h = this.handle;
@@ -748,10 +790,29 @@ export class HeroAnimator {
 
     const gq = h.group.getWorldQuaternion(this._q);
     for (const L of this.legs) {
-      this._pole.copy(L.poleLocal).applyQuaternion(gq);
+      // v15: the pole rides the hip's PARENT (the body), so an action that pitches
+      // or rolls the body carries the knee direction with it instead of flipping it
+      const par = L.hip.parent;
+      if (par) {
+        par.getWorldQuaternion(this._pq);
+        if (!L.parRel) L.parRel = gq.clone().invert().multiply(this._pq);
+        this._pq.multiply(this._iq.copy(L.parRel).invert());
+        this._pole.copy(L.poleLocal).applyQuaternion(this._pq);
+      } else {
+        this._pole.copy(L.poleLocal).applyQuaternion(gq);
+      }
       if (L.poleSm.lengthSq() < 1e-6) L.poleSm.copy(this._pole);
       else L.poleSm.lerp(this._pole, 1 - Math.exp(-dt / 0.08)).normalize();
       this._pole.copy(L.poleSm);
+      if (L.relaunch) {
+        // v15: back from hanging: swing in from where the ankle REALLY is
+        L.relaunch = false;
+        if (L.init) {
+          L.ankle.getWorldPosition(this._aw);
+          L.mode = 'swing'; L.swingT = 0; L.swingDur = 0.18; L.forced = true;
+          L.swingFrom.copy(this._aw); L.swingTo.copy(this._aw);
+        }
+      }
       this._worldFootTarget(L, this._ft, dt);
       this._goal.copy(this._ft);
       const hip = L.hip.getWorldPosition(this._hw2);

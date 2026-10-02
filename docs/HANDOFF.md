@@ -56,16 +56,17 @@ Direct answers, no filler. English only.
 |---|---|---|
 | infra | repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces + SEND THIS line) | DONE |
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve | overlap FIXED, slip FAIL |
-| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap 40 | avg slip ~1 cm, overstretch fixed, outliers FAIL |
-| 3 (v14) | jump-aware free feet, leg-only joint gate, SLIP FORENSICS | SHIPPED 2026-10-02 09:26, awaiting report |
+| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve | overlap FIXED |
+| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap 40 | overstretch FIXED, avg slip ~1 cm |
+| 3 (v14) | jump-aware free feet, leg-only joint gate, SLIP FORENSICS | walk clean; 97-100% of slips are in ACTIONS |
+| 4 (v15) | eased free legs, swing-in relaunch, hop hysteresis, kick=airborne, body-space pole | SHIPPED 2026-10-02 13:29, awaiting report |
 
-## Last results (v13 watch 4af59da)
-Avg slip PIP 1.05 / MOCHI 1.27 / ZIK 0.31 cm; >1 cm steps 29 / 32 / 4%; worst 18 / 21 / 5.8 cm.
-Overstretch straight walk MOCHI 388 -> 46. Joint probe pinned at 40.00 (= PLANT_RATE, limiter engaged).
-PIP 84 rad/s was on BODY bone (choreo), not legs. Max planted IK miss PIP 33 cm = body lifted by actions while feet "planted".
+## Last results (v14 watch b6e6312)
+ZIK straight walk slip 0.18 cm (PASS level). Free-run >1 cm steps PIP 24 / MOCHI 18 / ZIK 4.6 %, ALL during actions,
+one-frame pops. Leg joint 63 / 94 / 87 rad/s on hips (planted). Joint probe 185 rad/s = free-mode hip snap.
 
 ## Next
-1. Read SLIP FORENSICS: if outliers are "ACTION" -> tune hop threshold; if "one-frame pop" with post >> IK miss -> limiter lag, fix pole/branch instead of capping; if "creep" at reach ~0.98 -> more crouch / shorter stance.
-2. Foundation batch (do it next even if a few locomotion outliers remain): split Sim.ts (~47 KB) into systems, save/load, seeded world, distance LOD, 60 fps @ 12 gate.
-3. Then visual / feel / tools / slice per docs/ROADMAP.md.
+1. Read v15 gates. If action slips remain, read the SLIP FORENSICS top-8 list and fix the specific action.
+2. FOUNDATION batch (next, regardless of minor outliers): read Sim_00..04 in full, split Sim.ts into systems,
+   save/load, seeded world, distance LOD, 60 fps @ 12 gate.
+3. Then visual / feel / tools / slice per docs/ROADMAP.md and the NORTH STAR above.
