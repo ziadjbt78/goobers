@@ -266,6 +266,22 @@ export class Agent implements HashEntry {
       }
     }
 
+    // v12: personal space. Creatures never walk into each other's bodies; an
+    // overlapping neighbour adds a gentle push away to the desired velocity.
+    if (!this.carried) {
+      for (const o of this.world.nearby(this.pos, this.bulk * 2, this.id)) {
+        const dx = this.pos.x - o.pos.x;
+        const dz = this.pos.z - o.pos.z;
+        const d = Math.hypot(dx, dz) || 1e-4;
+        const minD = (this.bulk + o.bulk) * 0.42;
+        if (d < minD) {
+          const push = ((minD - d) / minD) * this.topSpeed * 0.6;
+          this.desired.x += (dx / d) * push;
+          this.desired.z += (dz / d) * push;
+        }
+      }
+    }
+
     // ---- the 3-step pipeline ---------------------------------------------
     // the world-foot-planting solver needs the live gait numbers
     const loco = this.motion.loco;
