@@ -1,0 +1,32 @@
+  251|       const rest = blushRest[i];
+  252|       b.scale.setScalar(0.85 + f.blush * 0.55 + f.cheek * 0.30 + open * 0.08);
+  253|       if (rest) b.position.copy(rest).multiplyScalar(1 + f.cheek * 0.03);
+  254|     }
+  255|   }
+  256| 
+  257|   return {
+  258|     root: handle.group,
+  259|     pivot: handle.pivot,
+  260|     body,
+  261|     head,
+  262|     legs,
+  263|     arms,
+  264|     extras,
+  265|     height: template.height,
+  266|     axes: speciesOf(template).axes,
+  267| 
+  268|     setGait(amount: number, phase: number): void {
+  269|       spiralT += 1 / 60;
+  270|       anim.setGait(amount, phase);
+  271|     },
+  272|     setFace,
+  273|     emote(kind: string): void {
+  274|       const g = EMOTE[kind];
+  275|       if (g) hooks.emote(g, 1.5, 1.1);
+  276|     },
+  277|     vfx(kind: string, pos: THREE.Vector3, scale = 1): void {
+  278|       hooks.vfx(kind, pos.x, pos.y, pos.z, scale);
+  279|     },
+  280|     groundHeight(x: number, z: number): number { return hooks.ground(x, z); },
+  281|   };
+  282| }

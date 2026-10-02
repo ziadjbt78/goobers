@@ -1,0 +1,250 @@
+    1| /**
+    2|  * Rig.ts — the bridge between the v8 motion layer and a hero render rig.
+    3|  *
+    4|  * It owns exactly three things and nothing else:
+    5|  *   1. the per-species locomotion numbers (heights per second) and the `axes`
+    6|  *      signs, which are the ONLY tuning the integration brief allows;
+    7|  *   2. the RigAdapter — the object CreatureMotion drives (root, pivot, body,
+    8|  *      head, legs, arms, extras, gait, face, emote, vfx, ground);
+    9|  *   3. the Face map, which turns one `Face` record into eye lids, pupil scale,
+   10|  *      mouth curve/open/width, blush, cheeks, brows and eyeMode symbols.
+   11|  *
+   12|  * No bone is ever owned twice: the pedestal animator writes the pose, the
+   13|  * motion layer writes the additive layer on top, and the Face map is the only
+   14|  * writer of the face meshes while a creature is in the World.
+   15|  */
+   16| import * as THREE from 'three';
+   17| import type { HeroHandle } from '../render/hero/HeroRenderer';
+   18| import type { HeroTemplate } from '../hero/types';
+   19| import type { HeroAnimator } from '../anim/HeroAnimator';
+   20| import type { RigAdapter } from './CreatureMotion';
+   21| import type { Face } from './Face';
+   22| import type { Glyph } from '../render/hero/emotes';
+   23| import type { LocoConfig, LocoKind } from './Locomotion';
+   24| 
+   25| /** The four sign switches the `G` debug poses exist to verify. */
+   26| export interface Axes { pitch: 1 | -1; roll: 1 | -1; limb: 'x' | 'z'; wave: 1 | -1 }
+   27| 
+   28| export interface SpeciesSpec {
+   29|   kind: LocoKind;
+   30|   /** the brief's starting values, all in creature heights (turn in rad/s) */
+   31|   walk: number;
+   32|   run: number;
+   33|   turn: number;
+   34|   accel: number;
+   35|   decel: number;
+   36|   /** distance per full gait cycle at walk, as a fraction of creature height.
+   37|    *  MEASURED, not guessed: tools/stride.mjs reports range / 0.5. */
+   38|   strideFactor: number;
+   39|   axes: Axes;
+   40| }
+   41| 
+   42| /**
+   43|  * Per-species locomotion. `walk/run/turn/accel/decel` are the brief's values.
+   44|  * `strideFactor` is written by the calibration run — see the build report.
+   45|  */
+   46| export const SPECIES: Record<string, SpeciesSpec> = {
+   47|   PIP: {
+   48|     kind: 'biped', walk: 0.9, run: 2.2, turn: 4, accel: 4, decel: 6,
+   49|     strideFactor: 0.199, axes: { pitch: 1, roll: -1, limb: 'x', wave: -1 },
+   50|   },
+   51|   MOCHI: {
+   52|     kind: 'quadruped', walk: 1.1, run: 2.8, turn: 4, accel: 4, decel: 6,
+   53|     strideFactor: 0.178, axes: { pitch: 1, roll: -1, limb: 'x', wave: -1 },
+   54|   },
+   55|   BOP: {
+   56|     kind: 'hopper', walk: 1.0, run: 2.4, turn: 4, accel: 4, decel: 6,
+   57|     strideFactor: 0.676, axes: { pitch: 1, roll: -1, limb: 'x', wave: 1 },
+   58|   },
+   59|   ZIK: {
+   60|     kind: 'hexapod', walk: 1.0, run: 2.6, turn: 5, accel: 5, decel: 7,
+   61|     strideFactor: 0.1765, axes: { pitch: 1, roll: -1, limb: 'x', wave: 1 },
+   62|   },
+   63| };
+   64| 
+   65| export function speciesOf(template: HeroTemplate): SpeciesSpec {
+   66|   const key = (template.name || '').split(' ')[0].toUpperCase();
+   67|   return SPECIES[key] ?? SPECIES.PIP;
+   68| }
+   69| 
+   70| /** Target gait frequencies. Short-legged creatures take slower steps, not faster legs. */
+   71| export const WALK_FREQ = 2.1;
+   72| export const RUN_FREQ = 3.0;
+   73| /** Locomotion stretches the stride by 40% at a full run — cadence must respect it. */
+   74| export const RUN_STRETCH = 1.4;
+   75| 
+   76| export interface LocoCalc {
+   77|   cfg: LocoConfig;
+   78|   legReach: number;
+   79|   reachCap: number;
+   80|   walkFreq: number;
+   81|   runFreq: number;
+   82|   speedCapped: boolean;
+   83| }
+   84| 
+   85| /**
+   86|  * Height-relative tuning -> absolute world units for one concrete creature.
+   87|  *
+   88|  * The stride is DERIVED from the cadence band rather than from the in-place foot
+   89|  * amplitude. Walk holds 2.1 Hz and the run holds 3.0 Hz; the stride carries the
+   90|  * speed, and when the leg cannot reach that far the SPEED comes down to meet the
+   91|  * leg instead of the legs speeding up. `walkStride * RUN_STRETCH` must still fit
+   92|  * inside the reach cap, because Locomotion applies exactly that stretch at a run.
+   93|  */
+   94| export function locoConfigFor(template: HeroTemplate, height: number, liveReach?: number): LocoConfig {
+   95|   return explainLoco(template, height, liveReach).cfg;
+   96| }
+   97| 
+   98| export function explainLoco(template: HeroTemplate, height: number, liveReach?: number): LocoCalc {
+   99|   const s = speciesOf(template);
+  100|   // Reach comes from the LIVE rig when the caller has it: `dna.scale` is applied
+  101|   // per-bone by reshape, so template offsets alone under-report the real leg.
+  102|   let restReach = 0;
+  103|   const f0 = template.feet[0];
+  104|   if (f0) {
+  105|     restReach = template.bones[f0.chain[1]].pos.length() + template.bones[f0.chain[2]].pos.length();
+  106|   }
+  107|   const ratio = template.height > 1e-6 ? height / template.height : 1;
+  108|   const legReach = liveReach && liveReach > 1e-6 ? liveReach : restReach * ratio;
+  109|   const reachCap = legReach > 0 ? legReach * 0.95 : Infinity;
+  110| 
+  111|   const targetWalk = s.walk * height;
+  112|   const targetRun = s.run * height;
+  113|   let walkSpeed = targetWalk;
+  114|   let runSpeed = targetRun;
+  115|   let stride: number;
+  116|   let runStride: number;
+  117|   let speedCapped = false;
+  118| 
+  119|   if (s.kind === 'hopper') {
+  120|     stride = s.strideFactor * height;
+  121|     runStride = stride * RUN_STRETCH;
+  122|     walkSpeed = Math.min(targetWalk, stride * WALK_FREQ);
+  123|     runSpeed = Math.max(walkSpeed * 1.15, Math.min(targetRun, runStride * RUN_FREQ));
+  124|   } else {
+  125|     stride = Math.min(targetWalk / WALK_FREQ, reachCap / RUN_STRETCH);
+  126|     runStride = Math.min(reachCap, stride * RUN_STRETCH);
+  127|     walkSpeed = stride * WALK_FREQ;
+  128|     runSpeed = runStride * RUN_FREQ;
+  129|     if (stride < targetWalk / WALK_FREQ - 1e-9 || runStride < targetRun / RUN_FREQ - 1e-9) speedCapped = true;
+  130|     if (runSpeed < walkSpeed * 1.15) runSpeed = walkSpeed * 1.15;
+  131|   }
+  132| 
+  133|   return {
+  134|     cfg: {
+  135|       kind: s.kind,
+  136|       walkSpeed, runSpeed, stride,
+  137|       turnRate: s.turn,
+  138|       accel: s.accel * height,
+  139|       decel: s.decel * height,
+  140|     },
+  141|     legReach, reachCap, walkFreq: walkSpeed / stride, runFreq: runSpeed / runStride,
+  142|     speedCapped,
+  143|   };
+  144| }
+  145| 
+  146| /** The emote names the motion layer speaks -> the glyph atlas the World draws. */
+  147| const EMOTE: Record<string, Glyph> = {
+  148|   heart: 'heart', note: 'note', alert: 'bang', bang: 'bang',
+  149|   question: 'question', zzz: 'zzz', stars: 'star', star: 'star', sweat: 'sweat',
+  150| };
+  151| 
+  152| export interface RigHooks {
+  153|   /** glyph above the head, same renderer the v7 World used */
+  154|   emote(g: Glyph, life: number, punch: number): void;
+  155|   /** ground/air effects, resolved by the Sim's Vfx */
+  156|   vfx(kind: string, x: number, y: number, z: number, scale: number): void;
+  157|   ground(x: number, z: number): number;
+  158| }
+  159| 
+  160| const MOUTH_BASE = -Math.PI * 0.5 - 1.55 * 0.5;
+  161| 
+  162| export function createRig(
+  163|   template: HeroTemplate,
+  164|   handle: HeroHandle,
+  165|   anim: HeroAnimator,
+  166|   hooks: RigHooks,
+  167| ): RigAdapter {
+  168|   const bones = handle.bones;
+  169|   const body = bones[template.bodyBone];
+  170|   const head = bones[template.headBone];
+  171| 
+  172|   // upper-leg bones, front to back — a template already lists them that way, so
+  173|   // the LAST entry is a back leg and the pet-roll kick lands where it should
+  174|   const legs: THREE.Object3D[] = [];
+  175|   for (const f of template.feet) {
+  176|     const hip = bones[f.chain[0]];
+  177|     if (hip) legs.push(hip);
+  178|   }
+  179|   const arms: THREE.Object3D[] = [];
+  180|   for (const b of bones) {
+  181|     if (b.name.startsWith('arm') && b.name.includes('upper')) arms.push(b);
+  182|   }
+  183|   const extras: THREE.Object3D[] = [];
+  184|   for (const b of bones) {
+  185|     const n = b.name;
+  186|     if (n.startsWith('ear') || n.startsWith('tail') || n.startsWith('ant')
+  187|       || n.startsWith('sprout_leaf') || n.startsWith('antenna')) extras.push(b);
+  188|   }
+  189| 
+  190|   const blushRest = handle.blushRest.map((v) => v.clone());
+  191|   let spiralT = 0;
+  192| 
+  193|   function setFace(f: Face): void {
+  194|     const sym = f.eyeMode;
+  195|     const closed = sym === 'closed';
+  196|     const showBall = sym === 'normal' || sym === 'star';
+  197|     const lidUpper = Math.max(0, Math.min(0.985, closed ? 1 : f.lidUpper));
+  198|     const lidLower = Math.max(0, Math.min(1, f.lidLower));
+  199|     const pupil = Math.max(0.3, Math.min(2.2, f.pupil));
+  200| 
+  201|     for (const e of handle.eyes) {
+  202|       const side = e.side >= 0 ? 1 : -1;
+  203|       e.lidPivot.rotation.x = -Math.PI * 0.5 + lidUpper * Math.PI * 0.98;
+  204|       e.lidPivot.rotation.z = f.lidTilt * 0.35 * side;
+  205|       e.lidLower.visible = lidLower > 0.02;
+  206|       e.lidLowerPivot.rotation.x = -Math.PI * 0.5 - lidLower * Math.PI * 0.40;
+  207| 
+  208|       e.sclera.visible = showBall;
+  209|       e.iris.visible = showBall;
+  210|       e.big.visible = showBall;
+  211|       e.small.visible = showBall;
+  212|       e.pupil.visible = sym === 'normal';
+  213|       e.pupil.scale.set(pupil, pupil, 1);
+  214| 
+  215|       e.arcHappy.visible = sym === 'happyArc';
+  216|       e.arcClosed.visible = closed;
+  217|       e.heart.visible = sym === 'heart';
+  218|       e.star.visible = sym === 'star';
+  219|       e.spiral.visible = sym === 'swirl';
+  220|       if (sym === 'swirl') e.spiral.rotation.z = -spiralT * 3;
+  221| 
+  222|       e.brow.visible = f.brow > 0.1;
+  223|       if (e.brow.visible) {
+  224|         e.brow.position.y = e.radius * (0.92 + f.brow * 0.20);
+  225|         e.brow.rotation.z = f.browAngle * 0.34 * side;
+  226|       }
+  227|     }
+  228| 
+  229|     const curve = Math.max(-1, Math.min(1, f.mouthCurve));
+  230|     const open = Math.max(0, Math.min(1, f.mouthOpen));
+  231|     const wide = Math.max(0.2, f.mouthWidth);
+  232| 
+  233|     handle.mouthOpen.visible = open > 0.06;
+  234|     handle.mouth.visible = open <= 0.06;
+  235|     if (handle.mouthOpen.visible) {
+  236|       handle.mouthOpen.scale.set(
+  237|         wide * (1 + open * 0.15),
+  238|         (0.6 + open * 0.75) * (1 + f.cheek * 0.25),
+  239|         1 + open * 0.2,
+  240|       );
+  241|     }
+  242|     if (handle.mouth.visible) {
+  243|       handle.mouth.scale.set(wide, 1, 1);
+  244|       // a half-torus arc: 0 rotation is a smile, so a full flip is a frown and
+  245|       // the midpoint is a flat line
+  246|       handle.mouth.rotation.z = MOUTH_BASE + (1 - curve) * 0.5 * Math.PI;
+  247|     }
+  248| 
+  249|     for (let i = 0; i < handle.blush.length; i++) {
+  250|       const b = handle.blush[i];

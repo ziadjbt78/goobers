@@ -1,0 +1,250 @@
+  251|     if (this.events.length > 400) this.events.shift();
+  252|   }
+  253| 
+  254|   drainBrainEvents(): void {
+  255|     for (const a of this.agents) {
+  256|       const b = this.brains.get(a.id);
+  257|       if (!b) continue;
+  258|       while (b.events.length) {
+  259|         const e = b.events.shift();
+  260|         if (e) this.events.push({ t: +this.simTime.toFixed(2), kind: e.kind, name: e.name });
+  261|       }
+  262|     }
+  263|   }
+  264| 
+  265|   // ---- creature lifecycle --------------------------------------------------
+  266|   spawn(hero: HeroId, at: THREE.Vector3 | null, quiet = false): Agent {
+  267|     const dna: HeroDNA = randomDNA(this.rng, hero);
+  268|     const pal = paletteAt(dna.palette);
+  269|     const colors = {
+  270|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
+  271|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
+  272|     };
+  273|     const template = applyDNA(buildHeroTemplate(hero, colors), dna);
+  274|     const handle = buildHero(template, pal);
+  275|     const agent = new Agent(this.world, template, dna, handle, this.seed + this.agents.length * 7919 + Math.floor(this.rng() * 1e6));
+  276|     const p = at ?? this.world.randomSpot(this.rng);
+  277|     agent.place(p.x, p.z);
+  278|     agent.onFootfall = (x, y, z, power) => this.vfx.dust(x, y, z, power);
+  279|     agent.onVfx = (kind, x, y, z, scale) => this.motionVfx(kind, x, y, z, scale);
+  280|     this.stage.scene.add(handle.group);
+  281|     this.agents.push(agent);
+  282|     this.world.agents.push(agent);
+  283|     this.brains.set(agent.id, new Brain(agent.id * 2654435761));
+  284|     if (!quiet) {
+  285|       this.pushEvent('spawn', agent);
+  286|       this.spawnTheatre(agent);
+  287|     }
+  288|     return agent;
+  289|   }
+  290| 
+  291|   /**
+  292|    * Spawn theatre: a glowing seed drops, wobbles, pops with a flash, then the
+  293|    * creature stretches tall, blinks twice, looks around and does a happy hop.
+  294|    */
+  295|   private spawnTheatre(a: Agent): void {
+  296|     const x = a.pos.x;
+  297|     const z = a.pos.z;
+  298|     const y = a.pos.y;
+  299|     a.motion.face.set('asleep');
+  300|     a.mood = 'surprised';
+  301|     this.hold(a, 3.2);
+  302|     a.say('bang', 0.9, 1.4);
+  303|     this.vfx.ring(x, y, z, { r0: 0.2, r1: 3.4, life: 0.9, color: '#bff7ff' });
+  304|     this.vfx.puff(x, y + 0.25, z, 18, { life: 0.8, size: 0.09, spread: 1.3, up: 1.6, color: '#d9f7ff' });
+  305|     this.after(0.55, () => {
+  306|       this.vfx.ring(x, y, z, { r0: 0.1, r1: 2.2, life: 0.6, color: '#fff3b0' });
+  307|       this.vfx.puff(x, y + 0.15, z, 22, { life: 0.55, size: 0.075, spread: 1.6, up: 1.1, color: '#fff0b8' });
+  308|       a.mood = 'happy';
+  309|       a.cheer();
+  310|       a.motion.face.set('curious');
+  311|     });
+  312|     this.after(1.1, () => { a.motion.face.set('asleep'); });
+  313|     this.after(1.3, () => { a.motion.face.set('curious'); });
+  314|     this.after(1.5, () => { a.motion.face.set('asleep'); });
+  315|     this.after(1.7, () => { a.motion.face.set('curious'); });
+  316|     this.after(2.1, () => { a.say('note', 1.2, 1.2); a.cheer(); });
+  317|     this.after(2.6, () => { a.mood = 'neutral'; a.motion.face.set('neutral'); });
+  318|   }
+  319| 
+  320|   remove(a: Agent): void {
+  321|     a.alive = false;
+  322|     this.stage.scene.remove(a.handle.group);
+  323|     a.handle.dispose();
+  324|     const i = this.agents.indexOf(a);
+  325|     if (i >= 0) this.agents.splice(i, 1);
+  326|     const j = this.world.agents.indexOf(a);
+  327|     if (j >= 0) this.world.agents.splice(j, 1);
+  328|     this.brains.delete(a.id);
+  329|     if (this.selected === a) this.selected = null;
+  330|     if (this.follow === a) this.follow = null;
+  331|     if (this.carried === a) this.carried = null;
+  332|     if (this.petting === a) this.petting = null;
+  333|   }
+  334| 
+  335|   // ---- player tools --------------------------------------------------------
+  336|   /**
+  337|    * Call. A ripple spreads on the ground and every creature nearby reacts
+  338|    * exactly the way its personality says it should: bold ones sprint, shy ones
+  339|    * peek first and creep in, lazy ones wave a limb and stay put.
+  340|    */
+  341|   call(pos: THREE.Vector3, radius = 10): number {
+  342|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.3, r1: radius * 0.75, life: 1.1, color: '#9fe8ff' });
+  343|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.2, r1: radius * 0.5, life: 0.8, color: '#ffffff' });
+  344|     this.vfx.puff(pos.x, pos.y + 0.1, pos.z, 10, { life: 0.7, size: 0.08, spread: 1.6, up: 1.0, color: '#cfeeff' });
+  345|     let n = 0;
+  346|     for (const a of this.agents) {
+  347|       const d = a.pos.distanceTo(pos);
+  348|       if (d >= radius) continue;
+  349|       n++;
+  350|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
+  351|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 1.0, 0, pos.z - Math.cos(ang) * 1.0);
+  352|       spot.y = heightAt(spot.x, spot.z);
+  353|       // the ears/antennae twitch and the head snaps to the sound first
+  354|       a.faceTarget = { x: pos.x, z: pos.z };
+  355|       a.say('bang', 1.1, 1.3);
+  356|       a.mood = 'surprised';
+  357|       this.hold(a, 3.6);
+  358| 
+  359|       const bold = a.trait('bold');
+  360|       const lazy = a.trait('lazy');
+  361|       const shy = 1 - a.trait('sociable');
+  362|       if (lazy > 0.62 && bold < 0.55) {
+  363|         // lazy: waves a limb, does not budge
+  364|         this.after(0.5, () => { if (a.alive) {         a.begin('wave');
+  365|         a.say('note', 1.6, 1.2);
+  366|       } });
+  367|     this.pushEvent('call_wave', a);
+  368|         this.after(2.2, () => { if (a.alive) a.mood = 'neutral'; });
+  369|         this.pushEvent('call_ignore', a);
+  370|         continue;
+  371|       }
+  372|       if (shy > 0.58 && bold < 0.62) {
+  373|         // shy: peek, wait, then creep over at a low throttle
+  374|         this.after(1.5, () => {
+  375|           if (!a.alive) return;
+  376|           a.goTo(spot, 0.45);
+  377|           a.mood = 'neutral';
+  378|         });
+  379|         this.pushEvent('call_peek', a);
+  380|         continue;
+  381|       }
+  382|       // bold: straight there at full tilt, bouncing
+  383|       this.after(0.25, () => {
+  384|         if (!a.alive) return;
+  385|         a.goTo(spot, 1);
+  386|         a.mood = 'happy';
+  387|         a.cheer();
+  388|       });
+  389|       this.pushEvent('call', a);
+  390|     }
+  391|     return n;
+  392|   }
+  393| 
+  394|   /**
+  395|    * Feed. The berry drops and bounces, the nearest hungry creature races over,
+  396|    * sniffs, chomps three times with puffed cheeks, then squints and wiggles to
+  397|    * a ♪. Late arrivals pull a sad face and a "?".
+  398|    */
+  399|   dropBerry(pos: THREE.Vector3): void {
+  400|     const mesh = new THREE.Mesh(this.berryGeo, MAT.lit);
+  401|     mesh.name = 'droppedBerry';
+  402|     mesh.position.set(pos.x, heightAt(pos.x, pos.z) + 1.6, pos.z);
+  403|     const rng = this.rng;
+  404|     mesh.userData.vx = (rng() - 0.5) * 0.6;
+  405|     this.stage.scene.add(mesh);
+  406|     this.drops.push({
+  407|       mesh,
+  408|       vel: new THREE.Vector3((rng() - 0.5) * 0.7, 0, (rng() - 0.5) * 0.7),
+  409|       life: 26,
+  410|     });
+  411|     this.vfx.ring(pos.x, heightAt(pos.x, pos.z), pos.z, { r0: 0.1, r1: 1.0, life: 0.5, color: '#ffc6d2' });
+  412| 
+  413|     const sorted = [...this.agents]
+  414|       .sort((a, b) => a.pos.distanceTo(pos) - b.pos.distanceTo(pos))
+  415|       .slice(0, 4);
+  416|     if (!sorted.length) return;
+  417| 
+  418|     const winner = sorted[0];
+  419|     sorted.forEach((a, i) => {
+  420|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
+  421|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 0.55, 0, pos.z - Math.cos(ang) * 0.55);
+  422|       spot.y = heightAt(spot.x, spot.z);
+  423|       a.goTo(spot, 1);
+  424|       a.mood = 'surprised';
+  425|       const b = this.brains.get(a.id);
+  426|       if (b) { b.action = 'eat'; b.actionAge = 0; b.needs.hunger = Math.min(1, b.needs.hunger + 0.2); }
+  427|       if (i === 0) {
+  428|         this.hold(winner, 5.0);
+  429|         this.pushEvent('feed', a);
+  430|       } else {
+  431|         this.hold(a, 5.0);
+  432|         this.pushEvent('feed_late', a);
+  433|       }
+  434|     });
+  435| 
+  436|     // the winner's full meal: sniff -> three chomps -> squint + wiggle + note
+  437|     this.after(1.3, () => {
+  438|       if (!winner.alive) return;
+  439|       winner.stop();
+  440|       winner.begin('sniff');
+  441|       winner.say('bang', 0.8);
+  442|     });
+  443|     this.after(2.3, () => {
+  444|       if (!winner.alive) return;
+  445|       winner.begin('chomp');
+  446|       winner.mood = 'happy';
+  447|       this.eatNearestBush(winner);
+  448|     });
+  449|     for (let i = 0; i < 3; i++) {
+  450|       this.after(2.4 + i * 0.55, () => {
+  451|         if (!winner.alive) return;
+  452|         winner.cheer();
+  453|         this.vfx.puff(winner.pos.x, winner.pos.y + 0.3, winner.pos.z, 4, { life: 0.35, size: 0.05, spread: 0.7, up: 0.8, color: '#ffd9e2' });
+  454|       });
+  455|     }
+  456|     this.after(4.1, () => {
+  457|       if (!winner.alive) return;
+  458|       winner.begin('eat');
+  459|       winner.mood = 'happy';
+  460|       winner.say('note', 1.6, 1.3);
+  461|       winner.wiggle = 1;
+  462|       this.hold(winner, 1.2);
+  463|     });
+  464|     this.after(5.2, () => { if (winner.alive) winner.mood = 'neutral'; });
+  465| 
+  466|     // late arrivals get nothing and they know it
+  467|     for (const a of sorted.slice(1)) {
+  468|       this.after(2.0, () => {
+  469|         if (!a.alive) return;
+  470|         a.mood = 'sad';
+  471|         a.say('question', 1.6, 1.2);
+  472|         a.stop();
+  473|       });
+  474|       this.after(3.8, () => { if (a.alive) a.mood = 'neutral'; });
+  475|     }
+  476|   }
+  477| 
+  478|   private eatNearestBush(a: Agent): void {
+  479|     const i = this.world.props.nearestFruitingBush(a.pos, 12);
+  480|     if (i >= 0) this.world.props.eat(i);
+  481|   }
+  482| 
+  483|   /** Hurl the ball. It bounces, rolls with spin, and creatures chase it. */
+  484|   throwBall(pos: THREE.Vector3): void {
+  485|     const b = this.world.props.ball;
+  486|     const d = new THREE.Vector3(pos.x - b.pos.x, 0, pos.z - b.pos.z);
+  487|     const dist = Math.min(9, d.length());
+  488|     if (dist < 0.01) return;
+  489|     d.normalize();
+  490|     b.vel.set(d.x * dist * 0.95, 0, d.z * dist * 0.95);
+  491|     b.vel.clampLength(0, 7);
+  492|     this.vfx.puff(b.pos.x, b.pos.y, b.pos.z, 8, { life: 0.4, size: 0.06, spread: 1.0, up: 0.9, color: '#e8f4ff' });
+  493|     this.pushEvent('ball', this.agents[0] ?? ({ name: 'player' } as Agent));
+  494| 
+  495|     // up to five creatures pile onto the chase
+  496|     const chasers = [...this.agents]
+  497|       .sort((x, y) => x.pos.distanceTo(b.pos) - y.pos.distanceTo(b.pos))
+  498|       .slice(0, 5);
+  499|     for (const a of chasers) {
+  500|       a.mood = 'happy';
