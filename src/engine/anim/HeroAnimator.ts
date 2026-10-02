@@ -705,8 +705,11 @@ export class HeroAnimator {
         L.swingFrom.set(L.lock.x, gy(L.lock.x, L.lock.z), L.lock.z);
         // a step taken to keep up (turn, idle drift, overstretch) does NOT
         // reach forward; a walking step lands half a stride ahead
-        const walking = u >= duty && !forceStep && speed > 0.05;
-        const lead = walking ? 0.5 * stride + speed * 0.10 : 0;
+        // v12: a step forced while WALKING must still reach forward; landing under
+        // the hip left it behind the body and forced it again (the forced-lift loop).
+        // Turning in place keeps lead 0.
+        const turning = Math.abs(angErr) > 25 * Math.PI / 180;
+        const lead = speed > 0.05 && !turning ? 0.5 * stride + speed * 0.10 : 0;
         let lx = gp.x + sh * lead + (L.plant.x * ch + L.plant.z * sh);
         let lz = gp.z + ch * lead + (-L.plant.x * sh + L.plant.z * ch);
         // Reach guard on the NEW target. `reach` is a 3D budget, so the
@@ -717,7 +720,9 @@ export class HeroAnimator {
         const vx = lx - this._vw.x, vz = lz - this._vw.z;
         const vd = Math.hypot(vx, vz);
         const dyHip = Math.max(0, this._vw.y - gy(this._vw.x, this._vw.z));
-        const maxFlat = Math.sqrt(Math.max(0.0025, reach * reach - dyHip * dyHip));
+        // v12: place at 80% of the flat allowance, not 100%. Planting exactly on the
+        // reach limit meant the very next frame re-measured it as out of reach.
+        const maxFlat = 0.80 * Math.sqrt(Math.max(0.0025, reach * reach - dyHip * dyHip));
         if (vd > maxFlat) { lx = this._vw.x + (vx / Math.max(1e-6, vd)) * maxFlat; lz = this._vw.z + (vz / Math.max(1e-6, vd)) * maxFlat; }
         L.swingTo.set(lx, gy(lx, lz), lz);
         L.swingDur = Math.min(0.45, Math.max(0.12, (u >= duty && !forceStep)
