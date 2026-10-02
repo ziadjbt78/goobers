@@ -1,3 +1,18 @@
+# NORTH STAR (permanent, never delete)
+We are building GOOBERS: a browser (Three.js) procedural creature sim + game + generator.
+Target: AAA polish and FEEL at premium stylized indie quality (not console-AAA fidelity).
+Method: layers of polish in large atomic batches, never one mega-prompt.
+
+Phases, in order:
+1. FOUNDATION: clean ECS-style creature update, perf budget (60 fps @ 12+), save/load,
+   automated visual + motion tests (watch.sh gates), consider the Three.js WebGPU renderer.
+2. VERTICAL SLICE: one gorgeous biome, 8 species, full faces/expressions, all tools with
+   juicy reactions, procedural audio. Must feel FINISHED.
+3. BREADTH: 16+ families (flyers, swimmers, crawlers), Studio with real impact,
+   gallery-style generator, breeding + genetics.
+4. WORLDS: streamed procedural world, multiple islands/biomes, weather, day/night, habitats.
+5. GAME LAYER: progression, Creaturedex, goals/quests, unlockable tools/biomes, photo mode, sharing.
+
 # HANDOFF: read this first in every new chat
 Repo: https://github.com/ziadjbt78/goobers (public). Owner: Ziad (digital marketer, not a coder).
 Goal: premium stylized creature sim/game in the browser (Vite + TS + Three.js + React/Zustand).
