@@ -60,6 +60,8 @@ await safe('freeRun', async () => {
     const out = {};
     for (const a of s.agents) a.hero.resetLiftStats?.();
     const st = new Map();
+    const legQ = new Map();
+    const events = [];
     const prevPos = new Map();
     let overlapFrames = 0, minRatio = Infinity;
     let prev = s.probe ? s.probe() : null;
@@ -77,6 +79,15 @@ await safe('freeRun', async () => {
       const ag = s.agents;
       for (const a of ag) {
         const o = (out[spOf(a)] ??= {});
+        const legs = a.hero.legs || [];
+        let lq = legQ.get(a);
+        if (!lq) { lq = legs.map((L) => [L.hip.quaternion.clone(), L.knee.quaternion.clone(), L.ankle.quaternion.clone()]); legQ.set(a, lq); }
+        else if (!a.hero.legsFree) legs.forEach((L, li) => { [L.hip, L.knee, L.ankle].forEach((b, bi) => {
+          const q = lq[li][bi]; const r = 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(q)))) / dt;
+          if (r > (o.legJ ?? 0)) { o.legJ = r; o.legJBone = `${b.name}(${L.mode})`; }
+          if (r > 20) o.legJFrames = (o.legJFrames ?? 0) + 1;
+          q.copy(b.quaternion); }); });
+        else legs.forEach((L, li) => { lq[li][0].copy(L.hip.quaternion); lq[li][1].copy(L.knee.quaternion); lq[li][2].copy(L.ankle.quaternion); });
         o.stances ??= 0; o.bad ??= 0; o.worst ??= 0; o.sum ??= 0; o.moving ??= 0; o.frames ??= 0;
         o.frames++;
         const pp = prevPos.get(a);
@@ -86,10 +97,25 @@ await safe('freeRun', async () => {
         (a.feet || []).forEach((f, fi) => {
           const c = m[fi];
           if (!f.swinging) {
-            if (!c) m[fi] = { x: f.pos.x, z: f.pos.z, max: 0 };
-            else { const d = Math.hypot(f.pos.x - c.x, f.pos.z - c.z); if (d > c.max) c.max = d; }
+            if (!c) m[fi] = { x: f.pos.x, z: f.pos.z, px: f.pos.x, pz: f.pos.z, max: 0, jump: 0, err: 0, perr: 0, rr: 0, busy: false };
+            else {
+              const d = Math.hypot(f.pos.x - c.x, f.pos.z - c.z); if (d > c.max) c.max = d;
+              const j = Math.hypot(f.pos.x - c.px, f.pos.z - c.pz); if (j > c.jump) c.jump = j;
+              c.px = f.pos.x; c.pz = f.pos.z;
+              const L = (a.hero.legs || []).find((l) => l.index === fi);
+              if (L) {
+                c.err = Math.max(c.err, L.err ?? 0); c.perr = Math.max(c.perr, L.postErr ?? 0);
+                const hp = L.hip.getWorldPosition(new f.pos.constructor());
+                c.rr = Math.max(c.rr, hp.distanceTo(f.pos) / Math.max(1e-4, L.reachW || 1));
+              }
+              if (a.motion.busy) c.busy = true;
+            }
           } else if (c) {
             o.stances++; o.sum += c.max; if (c.max > 0.01) o.bad++; if (c.max > o.worst) o.worst = c.max;
+            if (c.max > 0.01) {
+              const L = (a.hero.legs || []).find((l) => l.index === fi);
+              events.push({ sp: spOf(a), leg: fi, slip: c.max, jump: c.jump, err: c.err, perr: c.perr, rr: c.rr, busy: c.busy, cause: L && L.forced ? 'forced' : 'beat' });
+            }
             m[fi] = null;
           }
         });
@@ -111,10 +137,21 @@ await safe('freeRun', async () => {
       o.beat += L.beat; o.hard += L.hard; o.strain += L.strain; o.soft += L.soft;
       o.err = Math.max(o.err, L.maxErr); o.crouch += a.hero.crouch ?? 0; o.n++;
     }
-    return { out, overlapFrames, minRatio, steps, count: s.agents.length, lifts };
+    return { out, overlapFrames, minRatio, steps, count: s.agents.length, lifts, events };
   }, { dt: DT, steps: 900 });
   log(`  creatures ${free.count} | overlap frames ${free.overlapFrames}/${free.steps} | closest pair ${free.minRatio.toFixed(2)}x personal space`);
   for (const [sp, l] of Object.entries(free.lifts ?? {})) log(`  ${sp.padEnd(6)} lifts: beat ${l.beat} reach ${l.hard} strain ${l.strain} catch-up ${l.soft} | max planted IK miss ${(l.err * 100).toFixed(2)} cm | crouch ${(100 * l.crouch / Math.max(1, l.n)).toFixed(1)} cm`);
+  log('\n## SLIP FORENSICS (stances that slid > 1 cm)');
+  const ev = free.events ?? [];
+  for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
+    const e = ev.filter((x) => x.sp === sp);
+    if (!e.length) { log(`  ${sp.padEnd(6)} none`); continue; }
+    const pct = (f) => Math.round((100 * e.filter(f).length) / e.length);
+    log(`  ${sp.padEnd(6)} n ${e.length} | in action ${pct((x) => x.busy)}% | one-frame pop ${pct((x) => x.jump > 0.5 * x.slip)}% | ended by forced lift ${pct((x) => x.cause === 'forced')}% | max hip-foot/reach ${Math.max(...e.map((x) => x.rr)).toFixed(2)} | max IK miss ${(100 * Math.max(...e.map((x) => x.err))).toFixed(1)} cm | max post-limiter miss ${(100 * Math.max(...e.map((x) => x.perr))).toFixed(1)} cm`);
+  }
+  for (const x of [...ev].sort((p, q) => q.slip - p.slip).slice(0, 8))
+    log(`    ${x.sp} leg ${x.leg}: slip ${(x.slip * 100).toFixed(1)} jump ${(x.jump * 100).toFixed(1)} cm | reach ${x.rr.toFixed(2)} | IK ${(x.err * 100).toFixed(1)} post ${(x.perr * 100).toFixed(1)} cm | ${x.busy ? 'ACTION' : 'walk'} | ${x.cause}`);
+  for (const [sp, o] of Object.entries(free.out)) if (o.legJ) log(`  ${sp.padEnd(6)} LEG joint max ${o.legJ.toFixed(1)} rad/s on ${o.legJBone} | leg frames >20: ${o.legJFrames ?? 0}`);
   for (const [sp, o] of Object.entries(free.out)) {
     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);
@@ -187,7 +224,7 @@ for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
   const pct = o.stances ? (100 * o.bad) / o.stances : 0;
   gate(`${sp} worst slip <= 2 cm`, (o.worst ?? 0) <= 0.02, `${((o.worst ?? 0) * 100).toFixed(2)} cm`);
   gate(`${sp} steps >1 cm <= 2%`, pct <= 2, `${pct.toFixed(1)}%`);
-  gate(`${sp} joint <= 20 rad/s`, (o.joint ?? 0) <= 20, `${(o.joint ?? 0).toFixed(1)} on ${o.jointBone ?? '-'}`);
+  gate(`${sp} leg joint <= 20 rad/s`, (o.legJ ?? 0) <= 20, `${(o.legJ ?? 0).toFixed(1)} on ${o.legJBone ?? '-'}`);
 }
 gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
 gate('console errors = 0', errs.length === 0, errs.length);

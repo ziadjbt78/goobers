@@ -230,6 +230,8 @@ export class Agent implements HashEntry {
   noPivotJuice = false;
   /** v13: body rolled over (pet-roll etc.): feet do not plant */
   rolled = false;
+  /** v14: an action has lifted the body off the ground: feet hang, then re-land */
+  hopping = false;
   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
   overstretchFrames = 0;
   private restBodyY = 0;
@@ -322,6 +324,7 @@ export class Agent implements HashEntry {
       // reading only rotation.z silently discarded every pitch the motion
       // layer applied, which is why the G-key pitch probe read 0.0000 m.
       this.rolled = 2 * Math.acos(Math.min(1, Math.abs(pivot.quaternion.w))) > 0.6;
+      this.hopping = this.motion.busy && pivot.position.y > 0.05 * this.bulk;
       if (pivot.quaternion.x || pivot.quaternion.y || pivot.quaternion.z) {
         body.quaternion.multiply(pivot.quaternion);
       }
@@ -337,7 +340,7 @@ export class Agent implements HashEntry {
       if (!hips.has(rl[i]) || !this.legRest[i]) continue;
       this.legDelta[i] = (this.legDelta[i] ?? new THREE.Quaternion()).copy(this.legRest[i]).invert().multiply(rl[i].quaternion);
     }
-    const free = this.carried || this.rolled || this.motion.dangle.active || this.motion.dangle.airborne;
+    const free = this.carried || this.rolled || this.hopping || this.motion.dangle.active || this.motion.dangle.airborne;
     this.hero.solveWorldLegs(dt, free);
     if (!free) {
       for (let i = 0; i < rl.length; i++) {
@@ -376,7 +379,7 @@ export class Agent implements HashEntry {
       // the stance/swing flag now comes from the real world-planting solver
       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
       const leg = legs?.find((l) => l.index === i);
-      const swinging = leg ? leg.mode === 'swing' : false;
+      const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree;
       f.swinging = swinging;
       f.swing = 0;
       if (!swinging && hipBone && kneeBone && bone) {

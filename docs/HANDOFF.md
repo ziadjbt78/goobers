@@ -39,17 +39,18 @@ Direct answers, no filler. English only.
 ## Status
 | Batch | Scope | State |
 |---|---|---|
-| infra | GitHub repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces) | DONE |
+| infra | repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces + SEND THIS line) | DONE |
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve, gates | SHIPPED: overlap fixed (0), slip/joint gates FAIL |
-| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap, lift-cause diagnostics | SHIPPED 2026-10-02 09:19, awaiting gates |
+| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve | overlap FIXED, slip FAIL |
+| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap 40 | avg slip ~1 cm, overstretch fixed, outliers FAIL |
+| 3 (v14) | jump-aware free feet, leg-only joint gate, SLIP FORENSICS | SHIPPED 2026-10-02 09:26, awaiting report |
 
-## Last results (v12 watch e8fa96d)
-Overlap 0, errors 0, pedestal PASS. Slip worst PIP 22 / MOCHI 32 / ZIK 9.5 cm (35-56% of steps > 1 cm).
-Joint PIP 188 hip_r, MOCHI 127 knee_br, ZIK 82 knee_mid_r rad/s. Overstretch MOCHI 388/480 frames.
-Diagnosis: hips sit ~full leg length above ground (plus bob) -> no stance room; squash shears IK aim; straight legs flip branch.
+## Last results (v13 watch 4af59da)
+Avg slip PIP 1.05 / MOCHI 1.27 / ZIK 0.31 cm; >1 cm steps 29 / 32 / 4%; worst 18 / 21 / 5.8 cm.
+Overstretch straight walk MOCHI 388 -> 46. Joint probe pinned at 40.00 (= PLANT_RATE, limiter engaged).
+PIP 84 rad/s was on BODY bone (choreo), not legs. Max planted IK miss PIP 33 cm = body lifted by actions while feet "planted".
 
 ## Next
-1. Read v13 gates + lift-cause line. If slip still fails, the lift causes say which guard is wrong.
-2. Foundation batch: split Sim.ts (~47 KB) into systems, save/load, seeded world, distance LOD, perf gate 60 fps @ 12.
-3. Then visual / feel / tools / slice batches per docs/ROADMAP.md.
+1. Read SLIP FORENSICS: if outliers are "ACTION" -> tune hop threshold; if "one-frame pop" with post >> IK miss -> limiter lag, fix pole/branch instead of capping; if "creep" at reach ~0.98 -> more crouch / shorter stance.
+2. Foundation batch (do it next even if a few locomotion outliers remain): split Sim.ts (~47 KB) into systems, save/load, seeded world, distance LOD, 60 fps @ 12 gate.
+3. Then visual / feel / tools / slice per docs/ROADMAP.md.

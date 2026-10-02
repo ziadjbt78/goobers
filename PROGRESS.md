@@ -129,3 +129,9 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - Closed-loop IK: up to 3 re-aims on measured ankle error (squash shear), targets clamped to 98.5% reach.
 - Strain lift (planted miss > 1 cm), planted rate cap 40 rad/s, rolled-over = feet free.
 - watch: lift-cause breakdown, IK miss, crouch; watch.sh no longer deletes dump pieces.
+
+
+## v14 (2026-10-02 09:26): Batch 3, jump-aware feet + slip forensics
+- Feet hang free when an action lifts the body (> 5% height); free feet count as airborne, landing fires dust.
+- Joint gate now measures leg bones only (hip/knee/ankle, with plant/swing tag).
+- watch: SLIP FORENSICS section (action vs walk, one-frame pop vs creep, forced lift, reach ratio, IK miss before/after limiter).

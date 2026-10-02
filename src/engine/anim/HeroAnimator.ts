@@ -128,6 +128,8 @@ interface LegRig {
   err: number;
   /** v13: live world leg length (hip->knee + knee->ankle) */
   reachW: number;
+  /** v14: ankle miss AFTER the rate limiter (limiter lag shows up here) */
+  postErr: number;
 }
 
 interface ArmRig { upper: THREE.Bone; lower: THREE.Bone; side: number }
@@ -245,7 +247,7 @@ export class HeroAnimator {
         bodyAtPlant: new THREE.Vector3(),
         L1: knee.position.length(), L2: ankle.position.length(),
         restAngle: Math.atan2(f.plant.x, f.plant.z), forced: false,
-        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0,
+        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0, postErr: 0,
       });
       this.drive.footTargets.push(f.plant.clone());
       this.drive.footSwing.push(false);
@@ -704,14 +706,17 @@ export class HeroAnimator {
    */
   /** v13: world-units drop of the skeleton root that keeps every hip inside its leg */
   crouch = 0;
+  /** v14: legs hang free this frame (held, rolled, mid-jump) */
+  legsFree = false;
   liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 };
   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
 
   solveWorldLegs(dt: number, free: boolean): void {
     if (!this.external || this.legs.length === 0) return;
     void this._wrapPi;
+    this.legsFree = free;
     if (free) {
-      for (const L of this.legs) { L.init = false; L.mode = 'plant'; L.err = 0; }
+      for (const L of this.legs) { L.init = false; L.mode = 'plant'; L.err = 0; L.postErr = 0; }
       this.crouch *= Math.exp(-dt / 0.2);
       return;
     }
@@ -774,6 +779,8 @@ export class HeroAnimator {
         const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
         if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
       }
+      L.ankle.updateWorldMatrix(true, false);
+      L.postErr = L.ankle.getWorldPosition(this._aw).distanceTo(this._goal);
       L.prev[0].copy(L.hip.quaternion);
       L.prev[1].copy(L.knee.quaternion);
       L.prev[2].copy(L.ankle.quaternion);
