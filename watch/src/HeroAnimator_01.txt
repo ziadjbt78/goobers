@@ -1,0 +1,250 @@
+  251|       this.drive.footSwing.push(false);
+  252|     }
+  253| 
+  254|     for (const b of handle.bones) {
+  255|       if (b.name.startsWith('arm') && b.name.includes('upper')) {
+  256|         const lower = handle.bones.find((o) => o.name === b.name.replace('upper', 'lower'));
+  257|         if (lower) this.arms.push({ upper: b, lower, side: b.position.x < 0 ? -1 : 1 });
+  258|       }
+  259|     }
+  260|     for (const b of handle.bones) if (b.name.startsWith('spine')) this.spine.push(b);
+  261| 
+  262|     for (const b of handle.bones) {
+  263|       const n = b.name;
+  264|       if (n.startsWith('ear') || n.startsWith('tail') || n.startsWith('ant') || n.startsWith('sprout_leaf') || n.startsWith('antenna')) {
+  265|         this.wiggles.push({
+  266|           bone: b, w: new Wobble(),
+  267|           axis: n.startsWith('ant') || n.startsWith('antenna') ? 'y' : 'x',
+  268|           gain: n.startsWith('tail') ? 1.4 : 1.0,
+  269|         });
+  270|       }
+  271|     }
+  272|   }
+  273| 
+  274|   /** v11: per-leg planting state, for the joint-rate frame-type report. */
+  275|   legState(): { index: number; mode: string; forced: boolean }[] {
+  276|     return this.legs.map((l) => ({ index: l.index, mode: l.mode, forced: l.forced }));
+  277|   }
+  278| 
+  279|   hop(power = 3.4): void {
+  280|     this.hopV = power;
+  281|     this.squashV = -2.6;
+  282|     this.excited = 1.4;
+  283|   }
+  284| 
+  285|   /**
+  286|    * One-argument form = the locked Heroes pedestal baseline (time-driven cycle).
+  287|    * Two-argument form switches to external phase: the caller supplies the cycle
+  288|    * position every frame, so a World creature's legs and the pedestal
+  289|    * creature's legs march through exactly the same poses at gait 0.6.
+  290|    */
+  291|   setGait(v: number, phase?: number): void {
+  292|     this.gait = Math.max(0, Math.min(1, v));
+  293|     if (phase !== undefined) { this.external = true; this.externalPhase = phase; }
+  294|   }
+  295|   setMood(m: Mood): void { this.mood = m; }
+  296|   /** Pin the shared clock, so two animators can be compared frame for frame. */
+  297|   setClock(v: number): void { this.t = v; this.phase = 0; }
+  298| 
+  299|   /** Begin an additive action. Restarting the same action is a no-op. */
+  300|   play(id: ActionId): void {
+  301|     if (this.action === id) return;
+  302|     this.action = id;
+  303|     this.actionT = 0;
+  304|   }
+  305| 
+  306|   /** Cancel any ambient idle behaviour — an action is about to play. */
+  307|   interruptIdle(): void {
+  308|     this.idleAct = 'none';
+  309|     this.idleActT = 0;
+  310|     this.idleTimer = 4 + Math.random() * 6;
+  311|   }
+  312| 
+  313|   beginDrive(): void { this.driven = true; }
+  314| 
+  315|   focusPoint(out: THREE.Vector3): THREE.Vector3 {
+  316|     const e = this.handle.eyes[0];
+  317|     if (!e) return out.copy(this.handle.group.position);
+  318|     return out.setFromMatrixPosition(e.root.matrixWorld);
+  319|   }
+  320| 
+  321|   update(dt: number, lookAt: THREE.Vector3 | null): void {
+  322|     const h = this.handle;
+  323|     const t = this.template;
+  324|     this.t += dt;
+  325|     this.excited = Math.max(0, this.excited - dt);
+  326|     this.actionT += dt;
+  327| 
+  328|     // ---- layer weights -----------------------------------------------------
+  329|     const jumpy = t.locomotion === 'hop';
+  330|     const moving = this.driven && !this.external ? (this.drive.speed > 0.05 ? 1 : 0) : (this.gait > 0.02 ? 1 : 0);
+  331|     const locoTarget = this.driven || this.external ? moving : 0;
+  332|     this.locomotionW += (locoTarget - this.locomotionW) * Math.min(1, dt / 0.25);
+  333|     const loco = this.driven || this.external ? this.locomotionW : 0;
+  334|     const actTarget = this.action === 'none' ? 0 : 1;
+  335|     this.actionBlend += (actTarget - this.actionBlend) * Math.min(1, dt / 0.25);
+  336|     const act = this.actionBlend;
+  337| 
+  338|     // ---- ambient idle behaviour: the creature is never frozen --------------
+  339|     // in external mode the motion layer plays ambient behaviour through Choreo
+  340|     const standingStill = !this.external && loco < 0.15 && act < 0.2;
+  341|     if (standingStill && this.idleAct === 'none') {
+  342|       this.idleTimer -= dt;
+  343|       if (this.idleTimer <= 0) {
+  344|         const pool: IdleAct[] = ['sniff', 'scratch', 'sit', 'yawn', 'sniff'];
+  345|         const pick = this.deterministic ? 'sniff' : pool[Math.floor(Math.random() * pool.length)];
+  346|         this.idleAct = pick;
+  347|         this.idleActT = pick === 'sit' ? 2.4 : 1.3;
+  348|         this.idleTimer = 4 + Math.random() * 6;
+  349|       }
+  350|     }
+  351|     if (this.idleAct !== 'none') {
+  352|       this.idleActT -= dt;
+  353|       if (this.idleActT <= 0) { this.idleAct = 'none'; this.idleActW = 0; }
+  354|     }
+  355|     const idleTarget = this.idleAct !== 'none' && standingStill ? 1 : 0;
+  356|     this.idleActW += (idleTarget - this.idleActW) * Math.min(1, dt / 0.25);
+  357|     const ia = this.idleActW;
+  358| 
+  359|     // ---- the shared clock --------------------------------------------------
+  360|     const speed01 = this.driven && !this.external ? Math.min(1, this.drive.speed / 1.4) : this.gait;
+  361|     if (this.external) {
+  362|       this.phase = this.externalPhase;
+  363|     } else if (this.driven) {
+  364|       if (jumpy) this.phase += dt * (1.2 + speed01 * 2.6);
+  365|       else {
+  366|         const stride = Math.max(0.16, this.legs.length ? this.legs[0].step * 2.1 * Math.max(1, this.bulkScale * 0.5) : 0.4);
+  367|         this.phase = (this.phase + (this.drive.speed * dt) / stride) % 1;
+  368|       }
+  369|     } else {
+  370|       this.phase += dt * (jumpy ? 1.3 + this.gait * 2.2 : 1.1 + this.gait * 2.4);
+  371|     }
+  372| 
+  373|     // ---- body ---------------------------------------------------------------
+  374|     let bodyLift = 0;
+  375|     let bodyPitch = 0;
+  376|     let bodyRoll = 0;
+  377| 
+  378|     const beatLegs = this.template.feet.length > 4 ? 3 : 2;
+  379|     const beat = Math.abs(Math.sin(this.phase * Math.PI * 2 * beatLegs));
+  380| 
+  381|     if (this.external) {
+  382|       // The motion layer writes lift / squash / pitch / roll / yaw on the pivot
+  383|       // and body bones. The animator adds NOTHING here, so no channel is
+  384|       // applied twice.
+  385|       bodyLift = 0;
+  386|       bodyPitch = 0;
+  387|       bodyRoll = 0;
+  388|       this.squash = 1;
+  389|       this.bodyYaw = 0;
+  390|       this.headPitch = 0;
+  391|     } else if (this.driven) {
+  392|       bodyLift = this.drive.lift;
+  393|       bodyPitch = this.drive.pitch + this.drive.slopePitch;
+  394|       bodyRoll = -this.drive.lean + this.drive.slopeRoll;
+  395|       this.squash = this.drive.squash;
+  396|       this.bodyYaw = this.drive.yaw;
+  397|       this.headPitch = 0;
+  398|     } else if (jumpy) {
+  399|       this.hopV -= 22 * dt;
+  400|       this.hopY += this.hopV * dt;
+  401|       if (this.hopY < 0) {
+  402|         this.hopY = 0;
+  403|         if (this.hopV < -0.6) this.squashV += -this.hopV * 1.6;
+  404|         this.hopV = 0;
+  405|       }
+  406|       if (this.hopY === 0 && moving > 0) {
+  407|         const push = Math.max(0, Math.sin(this.phase * Math.PI * 2 * 0.5 + 0.4));
+  408|         if (push > 0.97) this.hopV = 2.6 + this.gait * 2.4;
+  409|       }
+  410|       bodyLift = this.hopY;
+  411|       const airborne = this.hopY > 0.001 ? 1 : 0;
+  412|       this.squashV += (-(this.squash - 1) * 120 - this.squashV * 14) * dt;
+  413|       this.squash += this.squashV * dt;
+  414|       this.squash = Math.max(0.72, Math.min(1.22, this.squash));
+  415|       bodyPitch = airborne * -0.06;
+  416|     } else {
+  417|       const bob = (beat - 0.5) * 0.028 * this.gait;
+  418|       const idle = Math.sin(this.t * 1.6) * 0.006 * (1 - moving);
+  419|       bodyLift = bob + idle + this.excited * Math.abs(Math.sin(this.t * 11)) * 0.05;
+  420|       this.squash += (1 - this.squash) * Math.min(1, dt * 9);
+  421|       bodyLift += -this.squashV * 0.004;
+  422|       this.squashV *= Math.max(0, 1 - dt * 8);
+  423|     }
+  424| 
+  425|     if (this.driven && !this.external) bodyLift += Math.sin(this.t * 1.6) * 0.006;
+  426|     bodyLift -= loco * 0.012;
+  427|     if (this.external) {
+  428|       bodyLift = 0; bodyPitch = 0; bodyRoll = 0;
+  429|       this.squash = 1; this.bodyYaw = 0; this.headPitch = 0;
+  430|     }
+  431| 
+  432|     // ---- ambient idle poses, layered on the base ---------------------------
+  433|     if (ia > 0.001) {
+  434|       const u = this.idleAct === 'none' ? 0 : Math.min(1, this.idleActT > 0.001 ? 1 - this.idleActT / 1.3 : 1);
+  435|       const ease = Math.sin(Math.min(1, u) * Math.PI);
+  436|       switch (this.idleAct) {
+  437|         case 'sniff':
+  438|           bodyPitch += ease * 0.42 * ia;                       // head down to the ground
+  439|           bodyLift -= ease * 0.05 * ia;
+  440|           break;
+  441|         case 'scratch':
+  442|           bodyRoll += Math.sin(this.idleActT * 26) * 0.20 * ia;
+  443|           bodyPitch += ease * 0.10 * ia;
+  444|           break;
+  445|         case 'sit':
+  446|           bodyPitch -= ease * 0.34 * ia;                       // rock back on the haunches
+  447|           bodyLift -= ease * 0.10 * ia;
+  448|           this.squash *= 1 - ease * 0.14 * ia;
+  449|           break;
+  450|         case 'yawn':
+  451|           bodyPitch -= ease * 0.22 * ia;                       // big stretch up
+  452|           bodyLift += ease * 0.06 * ia;
+  453|           this.squash *= 1 + ease * 0.10 * ia;
+  454|           break;
+  455|         default: break;
+  456|       }
+  457|     }
+  458| 
+  459|     // ---- attention: gaze, blink --------------------------------------------
+  460|     this.nextLook -= dt;
+  461|     if (this.nextLook <= 0) {
+  462|       this.nextLook = 0.5 + Math.random() * 1.5;
+  463|       this.lookX = this.deterministic ? 0 : (Math.random() - 0.5) * 0.9;
+  464|       this.lookY = this.deterministic ? 0 : (Math.random() - 0.5) * 0.5;
+  465|     }
+  466|     if (lookAt) {
+  467|       const eye = this._v.setFromMatrixPosition(h.eyes[0]?.root.matrixWorld ?? h.group.matrixWorld);
+  468|       const local = eye.clone().sub(h.group.getWorldPosition(new THREE.Vector3()));
+  469|       const yaw = Math.atan2(local.x, local.z);
+  470|       const dist = Math.max(0.3, local.length());
+  471|       const pitch = Math.atan2(lookAt.y - eye.y, dist);
+  472|       this.lookX = THREE.MathUtils.clamp(Math.atan2(Math.sin(yaw), Math.cos(yaw)), -0.9, 0.9);
+  473|       this.lookY = THREE.MathUtils.clamp(pitch, -0.5, 0.5);
+  474|     }
+  475|     // The eyes lead: they snap onto the target FIRST, the head arrives 0.15 s
+  476|     // later (drive.headLead is already delayed by the Agent), the body last.
+  477|     if (this.driven && Math.abs(this.drive.eyeLead) > 0.01) {
+  478|       this.lookX = THREE.MathUtils.clamp(this.lookX + this.drive.eyeLead, -1.1, 1.1);
+  479|     }
+  480|     this.gazeYaw += (this.lookX - this.gazeYaw) * Math.min(1, dt * 12);
+  481|     this.gazePitch += (this.lookY - this.gazePitch) * Math.min(1, dt * 12);
+  482| 
+  483|     this.blinkTimer -= dt;
+  484|     if (this.blinkTimer <= 0) {
+  485|       const sleepy = this.mood === 'sleepy';
+  486|       this.blinkT = 1;
+  487|       this.blinkTimer = (sleepy ? 1.4 : 2.0 + Math.random() * 4);
+  488|       if (this.doubleBlink > 0) { this.doubleBlink = 0; this.blinkTimer = 0.16; }
+  489|       else if (!this.deterministic && Math.random() < 0.16) this.doubleBlink = 1;
+  490|       this.blinkSide = !this.deterministic && Math.random() < 0.08 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+  491|     }
+  492|     if (this.blinkT > 0) this.blinkT = Math.max(0, this.blinkT - dt * 7);
+  493| 
+  494|     if (!this.driven) {
+  495|       this.nextTurn -= dt;
+  496|       if (this.nextTurn <= 0) {
+  497|         this.nextTurn = 1.6 + Math.random() * 3;
+  498|         this.bodyYawTarget = this.deterministic ? 0 : (Math.random() - 0.5) * 0.55;
+  499|       }
+  500|       this.headYawIdle = THREE.MathUtils.clamp(this.bodyYawTarget - this.bodyYaw, -0.55, 0.55) * 0.9;

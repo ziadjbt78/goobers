@@ -1,0 +1,250 @@
+  751|       this._goal.copy(this._ft);
+  752|       const hip = L.hip.getWorldPosition(this._hw2);
+  753|       const rMax = 0.985 * L.reachW;
+  754|       this._clampReach(this._ft, hip, rMax);
+  755|       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
+  756|       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
+  757|       let err = 0;
+  758|       for (let it = 0; it < 3; it++) {
+  759|         solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal });
+  760|         L.ankle.updateWorldMatrix(true, false);
+  761|         L.ankle.getWorldPosition(this._aw);
+  762|         const ex = this._goal.x - this._aw.x, ey = this._goal.y - this._aw.y, ez = this._goal.z - this._aw.z;
+  763|         err = Math.hypot(ex, ey, ez);
+  764|         if (err < 0.0015) break;
+  765|         this._ft.x += ex; this._ft.y += ey; this._ft.z += ez;
+  766|         this._clampReach(this._ft, hip, rMax);
+  767|       }
+  768|       L.err = err;
+  769|       if (L.mode === 'plant' && !L.landPending && err > this.liftStats.maxErr) this.liftStats.maxErr = err;
+  770|       const maxD = (L.mode === 'swing' || L.landPending ? LEG_RATE : PLANT_RATE) * dt;
+  771|       for (let k = 0; k < 3; k++) {
+  772|         const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
+  773|         const q = L.prev[k];
+  774|         const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
+  775|         if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
+  776|       }
+  777|       L.prev[0].copy(L.hip.quaternion);
+  778|       L.prev[1].copy(L.knee.quaternion);
+  779|       L.prev[2].copy(L.ankle.quaternion);
+  780|       if (L.landPending) { L.ankle.updateWorldMatrix(true, false); L.ankle.getWorldPosition(L.lock); L.landPending = false; }
+  781|     }
+  782|     if (this.petted) {
+  783|       const back = this.legs[this.legs.length - 1];
+  784|       const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
+  785|       if (kick > 0.02) back.hip.rotateX(-kick);
+  786|     }
+  787|   }
+  788| 
+  789|   private _clampReach(v: THREE.Vector3, hip: THREE.Vector3, r: number): void {
+  790|     if (r <= 1e-4) return;
+  791|     const d = v.distanceTo(hip);
+  792|     if (d > r) v.sub(hip).multiplyScalar(r / d).add(hip);
+  793|   }
+  794| 
+  795|   private _hw2 = new THREE.Vector3();
+  796|   private _goal = new THREE.Vector3();
+  797|   private _sc = new THREE.Vector3();
+  798| 
+  799|   /**
+  800|    * v12 world stepper. Leg geometry is measured LIVE in world space (creature
+  801|    * scale and squash included). Lifts are edge-triggered on the gait beat; a
+  802|    * swing re-aims every frame at where the foot must land so the coming stance
+  803|    * is centred under the hip; guards lift early only when the leg truly runs
+  804|    * out of reach, with an airborne-count limit so a creature never lifts every
+  805|    * foot at once.
+  806|    */
+  807|   private _worldFootTarget(L: LegRig, out: THREE.Vector3, dt: number): void {
+  808|     const g = this.handle.group;
+  809|     const gp = g.position;
+  810|     const hd = this.drive.heading;
+  811|     const fx = Math.sin(hd), fz = Math.cos(hd);
+  812|     const speed = this.drive.speed;
+  813|     const moving = speed > 0.05;
+  814|     const stride = Math.max(0.05, this.drive.stride);
+  815|     const ground = this.drive.groundY;
+  816|     const gy = (x: number, z: number): number => (ground ? ground(x, z) : gp.y) + L.plant.y;
+  817| 
+  818|     const hip = L.hip.getWorldPosition(this._vw);
+  819|     const knee = L.knee.getWorldPosition(this._kw);
+  820|     const ank = L.ankle.getWorldPosition(this._aw);
+  821|     const reach = Math.max(1e-3, hip.distanceTo(knee) + knee.distanceTo(ank));
+  822|     const rest = this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(g.matrixWorld);
+  823|     rest.y = gy(rest.x, rest.z);
+  824| 
+  825|     if (!L.init) {
+  826|       L.lock.copy(rest); L.mode = 'plant'; L.landT = 1;
+  827|       L.prevU = (this.externalPhase + L.phase) % 1;
+  828|       L.init = true;
+  829|     }
+  830| 
+  831|     const dyHip = Math.max(0, hip.y - rest.y);
+  832|     const r92 = 0.92 * reach;
+  833|     const restFlat = Math.hypot(rest.x - hip.x, rest.z - hip.z);
+  834|     const flat = Math.max(0.25 * reach, 1.3 * restFlat, Math.sqrt(Math.max(0, r92 * r92 - dyHip * dyHip)));
+  835|     const hardR = Math.max(0.97 * reach, 1.08 * hip.distanceTo(rest));
+  836|     const cycle = moving ? stride / speed : 1.2;
+  837|     const half = Math.min(0.5 * DUTY * stride, 0.6 * flat);
+  838| 
+  839|     const u = (this.externalPhase + L.phase) % 1;
+  840|     const onBeat = moving && crossedPhase(L.prevU, u, DUTY);
+  841|     L.prevU = u;
+  842|     L.landT += dt;
+  843| 
+  844|     // landing point: half a stance AHEAD of where the body will be at touchdown,
+  845|     // clamped inside the leg's reach from where the hip will be
+  846|     const plan = (remaining: number, o: THREE.Vector3): THREE.Vector3 => {
+  847|       const travel = moving ? speed * remaining : 0;
+  848|       const ahead = moving ? travel + half : 0;
+  849|       o.set(rest.x + fx * ahead, 0, rest.z + fz * ahead);
+  850|       const hx = hip.x + fx * travel, hz = hip.z + fz * travel;
+  851|       const vx = o.x - hx, vz = o.z - hz;
+  852|       const vd = Math.hypot(vx, vz), lim = 0.85 * flat;
+  853|       if (vd > lim) { o.x = hx + (vx / vd) * lim; o.z = hz + (vz / vd) * lim; }
+  854|       o.y = gy(o.x, o.z);
+  855|       return o;
+  856|     };
+  857| 
+  858|     if (L.mode === 'plant') {
+  859|       // v13: a planted foot the solver cannot hold steps instead of sliding
+  860|       const strained = L.err > 0.01 && L.landT > 0.05;
+  861|       const hard = strained || Math.hypot(L.lock.x - hip.x, L.lock.z - hip.z) > flat || hip.distanceTo(L.lock) > hardR;
+  862|       const rx = L.lock.x - rest.x, rz = L.lock.z - rest.z;
+  863|       const along = rx * fx + rz * fz;
+  864|       const lagging = moving && along < -1.35 * half;
+  865|       const drifted = !moving && Math.hypot(rx, rz) > Math.max(0.3 * flat, 0.05 * reach);
+  866|       let air = 0;
+  867|       for (const o of this.legs) if (o !== L && o.mode === 'swing') air++;
+  868|       const maxAir = this.legs.length >= 6 ? 3 : this.legs.length >= 4 ? 2 : 1;
+  869|       const beat = onBeat && L.landT > 0.2 * cycle;
+  870|       const soft = (lagging || drifted) && air < maxAir && L.landT > 0.08;
+  871|       if (hard || beat || soft) {
+  872|         const ls = this.liftStats;
+  873|         if (strained) ls.strain++; else if (hard) ls.hard++; else if (beat) ls.beat++; else ls.soft++;
+  874|         L.mode = 'swing';
+  875|         L.forced = !beat;
+  876|         L.swingT = 0;
+  877|         L.swingFrom.copy(L.lock);
+  878|         if (beat && !hard) {
+  879|           L.swingDur = THREE.MathUtils.clamp((1 - DUTY) * cycle, 0.12, 0.40);
+  880|         } else {
+  881|           plan(0.2, L.swingTo);
+  882|           const dd = Math.hypot(L.swingTo.x - L.lock.x, L.swingTo.z - L.lock.z);
+  883|           L.swingDur = THREE.MathUtils.clamp(0.14 + 0.35 * dd / reach, 0.14, 0.30);
+  884|         }
+  885|         plan(L.swingDur, L.swingTo);
+  886|       }
+  887|     }
+  888| 
+  889|     if (L.mode === 'swing') {
+  890|       L.swingT = Math.min(1, L.swingT + dt / Math.max(0.05, L.swingDur));
+  891|       plan((1 - L.swingT) * L.swingDur, this._tw);
+  892|       L.swingTo.lerp(this._tw, 1 - Math.exp(-dt / 0.05));
+  893|       const sT = L.swingT;
+  894|       const e = sT * sT * (3 - 2 * sT);
+  895|       out.lerpVectors(L.swingFrom, L.swingTo, e);
+  896|       const dd = Math.hypot(L.swingTo.x - L.swingFrom.x, L.swingTo.z - L.swingFrom.z);
+  897|       const k = reach / Math.max(1e-3, L.L1 + L.L2);
+  898|       const liftH = L.lift * k * Math.min(1, 0.35 + dd / stride);
+  899|       out.y = Math.max(out.y, gy(out.x, out.z)) + Math.sin(sT * Math.PI) * liftH;
+  900|       if (sT >= 1) { L.mode = 'plant'; L.landPending = true; L.landT = 0; L.lock.copy(out); }
+  901|       return;
+  902|     }
+  903|     L.lock.y += (gy(L.lock.x, L.lock.z) - L.lock.y) * Math.min(1, dt * 20);
+  904|     out.copy(L.lock);
+  905|   }
+  906| 
+  907|   private _kw = new THREE.Vector3();
+  908|   private _aw = new THREE.Vector3();
+  909|   private _rw = new THREE.Vector3();
+  910|   private _tw = new THREE.Vector3();
+  911|   private _ft = new THREE.Vector3();
+  912| 
+  913|   private _wrapPi(a: number): number {
+  914|     let d = a;
+  915|     while (d > Math.PI) d -= Math.PI * 2;
+  916|     while (d < -Math.PI) d += Math.PI * 2;
+  917|     return d;
+  918|   }
+  919| 
+  920|   private _vw = new THREE.Vector3();
+  921| 
+  922|   /** Height proxy used for the stride, set by the Agent; 1 for pedestal views. */
+  923|   bulkScale = 1;
+  924| 
+  925|   /**
+  926|    * The face. One place writes eyes, lids, brows, mouth and blush, so an
+  927|    * expression can never half-apply.
+  928|    */
+  929|   private _updateFace(dt: number, act: number): void {
+  930|     const h = this.handle;
+  931|     const closed = this.blinkT > 0 ? Math.sin(Math.PI * (1 - this.blinkT)) : 0;
+  932|     const f = this.face;
+  933| 
+  934|     const happy = this.mood === 'happy' ? 1 : 0;
+  935|     const love = this.mood === 'love' ? 1 : 0;
+  936|     const sad = this.mood === 'sad' ? 1 : 0;
+  937|     const surprised = this.mood === 'surprised' || this.mood === 'scared' ? 1 : 0;
+  938|     const sleepy = this.mood === 'sleepy' ? 1 : 0;
+  939|     const dizzy = this.mood === 'dizzy' ? 1 : 0;
+  940| 
+  941|     // target face values, then blend — never a hard set
+  942|     let lidT = f.lid;
+  943|     let openT = f.mouthOpen;
+  944|     let wideT = f.mouthWide;
+  945|     let blushT = f.blush;
+  946|     let pupT = 1;
+  947|     let spinT = 0;
+  948| 
+  949|     if (this.petted) { lidT = 0.72; blushT = 1; pupT = 1.06; wideT = 1.15; openT = Math.max(openT, 0.25); }
+  950|     if (this.held) { lidT = 0; blushT = 0.2; pupT = 1.35; openT = Math.max(openT, 0.75); wideT = 0.8; }
+  951|     if (dizzy) { pupT = 0.7; spinT = 1; }
+  952|     if (sleepy) { lidT = Math.max(lidT, 0.62); }
+  953|     if (happy || love) { lidT = Math.max(lidT, 0.55); blushT = Math.max(blushT, 0.8); pupT = 1.08; openT = Math.max(openT, 0.35); }
+  954|     if (surprised) { lidT = 0; pupT = 1.3; openT = Math.max(openT, 0.85); wideT = 0.85; }
+  955|     if (sad) { lidT = Math.max(lidT, 0.28); pupT = 1.12; wideT = 0.85; }
+  956|     if (this.action === 'chomp' || this.action === 'eat') {
+  957|       const chew = 0.5 + 0.5 * Math.sin(this.actionT * 22);
+  958|       openT = Math.max(openT, chew * 0.95);
+  959|       wideT = 1.1;
+  960|       blushT = Math.max(blushT, 0.55);
+  961|     }
+  962|     if (this.action === 'wave') { lidT = Math.max(lidT, 0.5); openT = Math.max(openT, 0.7); wideT = 1.2; }
+  963|     if (this.idleAct === 'yawn' && this.idleActW > 0.2) { openT = Math.max(openT, 0.95 * this.idleActW); wideT = 0.9; lidT = Math.max(lidT, 0.75 * this.idleActW); }
+  964|     if (this.idleAct === 'sniff' && this.idleActW > 0.2) { wideT = 0.8; }
+  965| 
+  966|     const k = Math.min(1, dt / 0.22);
+  967|     f.lid += (lidT - f.lid) * k;
+  968|     f.mouthOpen += (openT - f.mouthOpen) * k;
+  969|     f.mouthWide += (wideT - f.mouthWide) * k;
+  970|     f.blush += (blushT - f.blush) * k;
+  971|     f.pupil += (pupT - f.pupil) * Math.min(1, dt * 6);
+  972|     f.gazeSpin += (spinT - f.gazeSpin) * Math.min(1, dt * 4);
+  973| 
+  974|     this.pupil += ((1 + surprised * 0.10 - happy * 0.05 + (sleepy + dizzy) * -0.08) - this.pupil) * Math.min(1, dt * 5);
+  975|     this.lidClose += (f.lid - this.lidClose) * Math.min(1, dt * 6);
+  976| 
+  977|     const dizzySpin = f.gazeSpin * this.t * 5.5;
+  978|     for (const e of h.eyes) {
+  979|       // a one-eyed wink, when the blink roll said so
+  980|       const lid = this.blinkSide > 0 ? (e.side > 0 ? closed : 0)
+  981|         : this.blinkSide < 0 ? (e.side < 0 ? closed : 0)
+  982|           : closed;
+  983|       e.lidPivot.rotation.x = -Math.PI * 0.5 + Math.max(0, Math.min(0.985, lid + this.lidClose)) * Math.PI * 0.98;
+  984|       // eyes lead the head: the socket carries the gaze, the head carries the pose
+  985|       const spinY = f.gazeSpin > 0.05 ? Math.cos(dizzySpin) * 0.45 * f.gazeSpin : 0;
+  986|       const spinP = f.gazeSpin > 0.05 ? Math.sin(dizzySpin) * 0.35 * f.gazeSpin : 0;
+  987|       e.socket.rotation.set(this.gazePitch + spinP, this.gazeYaw + spinY, f.gazeSpin * Math.sin(dizzySpin * 0.7) * 0.4);
+  988|       const pup = this.pupil * f.pupil * (1 + surprised * 0.05);
+  989|       e.pupil.scale.set(pup, pup * (1 - sad * 0.12), 1);
+  990|       const browUp = surprised * 1.0 + sad * 0.45;
+  991|       e.brow.visible = browUp > 0.08;
+  992|       if (e.brow.visible) {
+  993|         e.brow.position.y = e.radius * (0.92 + browUp * 0.20);
+  994|         // angry/sad tilt: inner end up for sad, down for angry
+  995|         e.brow.rotation.z = (sad * -0.30 + (this.mood === 'scared' ? 0.25 : 0)) * (e.side >= 0 ? 1 : -1);
+  996|       }
+  997|     }
+  998| 
+  999|     const open = f.mouthOpen;
+ 1000|     h.mouthOpen.visible = open > 0.06;

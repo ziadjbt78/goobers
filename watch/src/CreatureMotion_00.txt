@@ -1,0 +1,116 @@
+    1| import { Euler, Object3D, Quaternion, Vector3 } from 'three';
+    2| import { Locomotion, type LocoConfig } from './Locomotion';
+    3| import { Juice } from './Juice';
+    4| import { FaceController, type Face } from './Face';
+    5| import { Choreo, ACTIONS, ZERO_POSE, petPose, type Pose } from './Choreo';
+    6| import { Dangle } from './Dangle';
+    7| 
+    8| export interface RigAdapter {
+    9|   root: Object3D;     // world position + heading (yaw)
+   10|   pivot: Object3D;    // NEW ground-level group between root and the visual rig: lift, squash, grow, roll-over
+   11|   body: Object3D;     // torso bone: additive lean, sway, wiggle
+   12|   head?: Object3D;    // additive headPitch/headRoll
+   13|   legs: Object3D[];   // upper-leg bones, BACK legs LAST
+   14|   arms: Object3D[];   // upper-arm bones (empty -> first front leg waves instead)
+   15|   extras: Object3D[]; // ear/antenna/tail roots
+   16|   height: number;     // creature height in world units
+   17|   axes: { pitch: 1 | -1; roll: 1 | -1; limb: 'x' | 'z'; wave: 1 | -1 }; // flip if a motion goes the wrong way
+   18|   setGait(amount: number, phase: number): void;  // drives the EXISTING Heroes in-place cycle
+   19|   setFace(f: Face): void;
+   20|   emote(kind: string): void;                     // 'heart' 'alert' 'question' 'note' 'zzz' 'stars' 'sweat'
+   21|   vfx(kind: string, pos: Vector3, scale?: number): void; // 'dust' 'dustRing' 'flash' 'crumbs' 'ring'
+   22|   groundHeight(x: number, z: number): number;
+   23| }
+   24| 
+   25| const ZERO_V = new Vector3(), X = new Vector3(1, 0, 0), Z = new Vector3(0, 0, 1), _q = new Quaternion();
+   26| const rot = (o: Object3D, axis: 'x' | 'z', a: number) => { _q.setFromAxisAngle(axis === 'x' ? X : Z, a); o.quaternion.multiply(_q); };
+   27| 
+   28| export class CreatureMotion {
+   29|   readonly loco: Locomotion; readonly juice: Juice; readonly face = new FaceController(); readonly dangle = new Dangle();
+   30|   grabPoint: Vector3 | null = null;
+   31|   private choreo: Choreo | null = null; private queue: string[] = [];
+   32|   private petT = -1; private heartT = 0; private t = 0;
+   33|   private P: Pose = { ...ZERO_POSE };
+   34|   private rest = new Map<Object3D, Quaternion>(); private q = new Quaternion(); private e = new Euler();
+   35| 
+   36|   constructor(public rig: RigAdapter, cfg: LocoConfig, start: Vector3, heading = 0) {
+   37|     this.loco = new Locomotion(cfg); this.loco.pos.copy(start); this.loco.heading = heading;
+   38|     this.juice = new Juice(cfg.kind);
+   39|     for (const o of [rig.body, rig.head, ...rig.legs, ...rig.arms, ...rig.extras]) if (o) this.rest.set(o, o.quaternion.clone());
+   40|   }
+   41| 
+   42|   get busy() { return !!this.choreo || this.petT >= 0 || this.dangle.active || this.dangle.airborne; }
+   43|   play(...names: string[]) { this.queue.push(...names); if (!this.choreo) this.next(); }
+   44|   interrupt(...names: string[]) { this.queue = []; this.choreo = null; this.face.mouthOverride = null; if (names.length) this.play(...names); }
+   45|   private next() { const n = this.queue.shift(); this.choreo = n ? new Choreo(ACTIONS[n]) : null; }
+   46| 
+   47|   petStart() { this.interrupt(); this.petT = 0; }
+   48|   petEnd() { if (this.petT < 0) return; this.petT = -1; this.face.set('neutral'); this.play('petRelease'); }
+   49|   pickUp(grab: Vector3) { this.interrupt(); this.dangle.grab(this.loco.pos); this.grabPoint = grab.clone(); this.face.set('scared'); this.rig.emote('sweat'); }
+   50|   drop(throwVel: Vector3) { this.grabPoint = null; this.dangle.release(throwVel); this.face.set('surprised'); }
+   51| 
+   52|   /** 1) BEFORE HeroAnimator.update */
+   53|   preAnimate(dt: number, desiredVel: Vector3) {
+   54|     this.t += dt;
+   55|     for (const [o, q] of this.rest) o.quaternion.copy(q);   // clear last frame's additive layer
+   56|     this.loco.update(dt, this.busy ? ZERO_V : desiredVel, this.rig.groundHeight);
+   57|     this.juice.update(dt, this.loco);
+   58|     this.rig.setGait(this.busy ? 0 : this.loco.gaitAmount(), this.loco.phase);
+   59|   }
+   60| 
+   61|   /** 2) AFTER HeroAnimator.update */
+   62|   postAnimate(dt: number) {
+   63|     const r = this.rig, j = this.juice.out, P = this.P, t = this.t;
+   64|     Object.assign(P, ZERO_POSE);
+   65|     if (this.choreo) { Object.assign(P, this.choreo.update(dt, r, this.face)); if (this.choreo.done) this.next(); }
+   66|     if (this.petT >= 0) {
+   67|       this.petT += dt; Object.assign(P, petPose(this.petT, t));
+   68|       this.face.set(this.petT > 2 ? 'love' : 'joyful');
+   69|       if ((this.heartT -= dt) <= 0) { this.heartT = 0.35; r.emote('heart'); }
+   70|     }
+   71| 
+   72|     const landed = this.dangle.update(dt, this.grabPoint, r.height * 0.9, this.loco.heading, r.groundHeight);
+   73|     if (landed) { this.loco.pos.copy(this.dangle.pos); this.loco.speed = 0; this.play('landDizzy'); }
+   74|     if (this.dangle.active || this.dangle.airborne) {
+   75|       r.root.position.copy(this.dangle.pos);
+   76|       P.pitch += this.dangle.pitch; P.roll += this.dangle.roll; P.limbFlail = this.dangle.flail;
+   77|       if (this.dangle.active) P.squash = 1.15;   // stretched while held
+   78|     } else r.root.position.copy(this.loco.pos);
+   79|     r.root.rotation.set(0, this.loco.heading, 0);
+   80| 
+   81|     if (this.loco.footfall && this.loco.speed > this.loco.cfg.walkSpeed * 0.8)
+   82|       r.vfx('dust', this.loco.pos, 0.6 + this.loco.runT());
+   83| 
+   84|     // pivot: lift + volume-preserving squash + grow + roll-over
+   85|     const s = j.squash * P.squash, g = P.grow, side = 1 / Math.sqrt(s);
+   86|     r.pivot.position.set(0, (j.lift + P.lift + P.rollOver * 0.85) * r.height, 0);
+   87|     r.pivot.scale.set(g * side, g * s, g * side);
+   88|     r.pivot.rotation.set(0, 0, P.rollOver * Math.PI * 0.9 * r.axes.roll);
+   89| 
+   90|     // body: lean, sway, wiggle
+   91|     this.e.set(r.axes.pitch * (j.pitch + P.pitch), j.yawSway + P.yaw + Math.sin(t * 14) * 0.14 * P.wiggle, r.axes.roll * (j.roll + P.roll), 'YXZ');
+   92|     r.body.quaternion.multiply(this.q.setFromEuler(this.e));
+   93|     if (r.head) { this.e.set(r.axes.pitch * P.headPitch, 0, P.headRoll, 'YXZ'); r.head.quaternion.multiply(this.q.setFromEuler(this.e)); }
+   94| 
+   95|     // limbs: flail, kick, wave
+   96|     const ax = r.axes.limb, ax2 = ax === 'x' ? 'z' : 'x';
+   97|     r.legs.forEach((b, i) => {
+   98|       let a = Math.sin(t * 18 + i * 1.7) * 0.6 * P.limbFlail;
+   99|       if (P.legKick && i === r.legs.length - 1) a += Math.sin(t * 22) * 0.9 * P.legKick;
+  100|       if (a) rot(b, ax, a);
+  101|     });
+  102|     const wavers = r.arms.length ? r.arms : r.legs.slice(0, 1);
+  103|     wavers.forEach((b, i) => {
+  104|       let a = Math.sin(t * 18 + i * 2.3 + 1) * 0.7 * P.limbFlail;
+  105|       if (P.armWave && i === 0) a += r.axes.wave * (-1.2 + Math.sin(t * 2 * Math.PI * 3) * 0.45) * P.armWave;
+  106|       if (a) rot(b, r.arms.length ? ax2 : ax, a);
+  107|     });
+  108|     r.extras.forEach((b, i) => {
+  109|       const a = Math.sin(t * 16 + i) * 0.5 * P.limbFlail + Math.sin(t * 12 + i) * 0.25 * P.wiggle;
+  110|       if (a) rot(b, 'z', a);
+  111|     });
+  112| 
+  113|     this.face.update(dt);
+  114|     r.setFace(this.face.cur);
+  115|   }
+  116| }
