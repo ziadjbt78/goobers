@@ -1,250 +1,250 @@
- 1001|     for (let i = 0; i < seconds / dt; i++) {
- 1002|       this.step(dt);
- 1003|       for (const a of this.agents) {
- 1004|         const sp = a.template.name.split(' ')[0];
- 1005|         const st = a.hero.legState();
- 1006|         const cur = a.handle.bones.map((b) => ({
- 1007|           q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
- 1008|           mode: '', forced: false,
- 1009|         }));
- 1010|         const pv = prev.get(a.id);
- 1011|         if (pv) {
- 1012|           for (const L of a.template.feet) {
- 1013|             for (let k = 0; k < 3; k++) {
- 1014|               const bi = L.chain[k];
- 1015|               const qa = pv[bi], qb = cur[bi];
- 1016|               const dot = Math.abs(qa.q[0] * qb.q[0] + qa.q[1] * qb.q[1] + qa.q[2] * qb.q[2] + qa.q[3] * qb.q[3]);
- 1017|               const rate = (2 * Math.acos(Math.min(1, dot))) / dt;
- 1018|               const st0 = st.find((x) => x.index === a.template.feet.indexOf(L));
- 1019|               if (rate > (out[sp]?.rate ?? 0)) {
- 1020|                 out[sp] = {
- 1021|                   rate: Math.round(rate * 100) / 100,
- 1022|                   bone: a.handle.bones[bi].name,
- 1023|                   frameType: (st0?.mode ?? 'plant') === 'swing'
- 1024|                     ? (st0?.forced ? 'early-lift (reach/turn/drift guard)' : 'normal swing')
- 1025|                     : 'plant',
- 1026|                   wasForced: !!st0?.forced,
- 1027|                 };
- 1028|               }
- 1029|             }
- 1030|           }
- 1031|         }
- 1032|         prev.set(a.id, cur);
- 1033|       }
- 1034|     }
- 1035|     this.brainEnabled = prevBrain;
- 1036|     return out;
- 1037|   }
- 1038| 
- 1039|   /**
- 1040|    * v11 cadence ramp: walk -> run -> walk, sampling the REAL cycle frequency in
- 1041|    * short windows so a pop at the gait transition would show up as a jump.
- 1042|    */
- 1043|   freqRampProbe(sp = 'PIP'): { t: number; speed: number; freq: number; stride: number }[] {
- 1044|     const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
- 1045|     if (!a) return [];
- 1046|     const prevB = this.brainEnabled;
- 1047|     this.brainEnabled = false;
- 1048|     for (const o of this.agents) { o.stop(); o.debugPose = 0; }
- 1049|     a.place(0, -6, 0);
- 1050|     const dt = 1 / 60;
- 1051|     for (let i = 0; i < 60; i++) { a.goTo({ x: 0, y: 0, z: 60 }, 0.4); a.update(dt); }
- 1052|     const rows: { t: number; speed: number; freq: number; stride: number }[] = [];
- 1053|     const total = 900;
- 1054|     let cycle = 0, lastPhase = a.motion.loco.phase, speedSum = 0, win = 0;
- 1055|     for (let i = 0; i < total; i++) {
- 1056|       // 0 -> 1 -> 0 over the run
- 1057|       const k = i / total;
- 1058|       const th = k < 0.5 ? k * 2 : (1 - k) * 2;
- 1059|       a.goTo({ x: 0, y: 0, z: 200 }, Math.max(0.35, th));
- 1060|       a.update(dt);
- 1061|       speedSum += a.motion.loco.speed; win++;
- 1062|       if (a.motion.loco.phase < lastPhase) cycle++;
- 1063|       lastPhase = a.motion.loco.phase;
- 1064|       if (win >= 60) {
- 1065|         const loco = a.motion.loco;
- 1066|         rows.push({
- 1067|           t: Math.round(i * dt * 10) / 10,
- 1068|           speed: Math.round((speedSum / win) * 1e3) / 1e3,
- 1069|           freq: Math.round((cycle / win) * 60 * 1e3) / 1e3,
- 1070|           stride: Math.round(loco.cfg.stride * (1 + 0.4 * loco.runT()) * 1e4) / 1e4,
- 1071|         });
- 1072|         cycle = 0; speedSum = 0; win = 0;
- 1073|       }
- 1074|     }
- 1075|     this.brainEnabled = prevB;
- 1076|     return rows;
- 1077|   }
- 1078| 
- 1079|   static compare = compare;
- 1080| 
- 1081|   /**
- 1082|    * Integration step 4 — stride calibration. Drive each species' pedestal
- 1083|    * animator with an external gait cycle at 0.6 and measure how far the REAL
- 1084|    * ankle bones travel forward in body space over one full cycle. The gait
- 1085|    * cycle advances `stride` per cycle, so `stride = range / 0.5`.
- 1086|    */
- 1087|   strideProbe(): Record<string, {
- 1088|     stride: number; range: number; height: number; kind: string; factor: number; legReach: number;
- 1089|     stanceFrac: number; stanceDisp: number; strideUserFormula: number; feet: number[];
- 1090|   }> {
- 1091|     const out: Record<string, {
- 1092|       stride: number; range: number; height: number; kind: string; factor: number; legReach: number;
- 1093|       stanceFrac: number; stanceDisp: number; strideUserFormula: number; feet: number[];
- 1094|     }> = {};
- 1095|     const pal = paletteAt(0);
- 1096|     const colors = {
- 1097|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
- 1098|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
- 1099|     };
- 1100|     const v = new THREE.Vector3();
- 1101|     for (const id of HERO_IDS) {
- 1102|       const tpl = buildHeroTemplate(id, colors);
- 1103|       const h = buildHero(tpl, pal);
- 1104|       const anim = new HeroAnimator(tpl, h);
- 1105|       anim.deterministic = true;
- 1106|       h.group.position.set(0, 0, 0);
- 1107|       h.group.rotation.set(0, 0, 0);
- 1108|       const n = tpl.feet.length;
- 1109|       const lo = new Array<number>(n).fill(1e9);
- 1110|       const hi = new Array<number>(n).fill(-1e9);
- 1111|       const backSamples = new Array<number>(n).fill(0);
- 1112|       const backSpan = new Array<number>(n).fill(0);
- 1113|       const backLo = new Array<number>(n).fill(1e9);
- 1114|       const backHi = new Array<number>(n).fill(-1e9);
- 1115|       const N = 480;
- 1116|       const prevZ = new Array<number>(n).fill(0);
- 1117|       const havePrev = new Array<boolean>(n).fill(false);
- 1118|       for (let i = 0; i < N; i++) {
- 1119|         anim.setGait(0.6, i / N);
- 1120|         anim.update(1 / 60, null);
- 1121|         h.group.updateMatrixWorld(true);
- 1122|         for (let k = 0; k < n; k++) {
- 1123|           const bone = h.bones[tpl.feet[k].chain[2]];
- 1124|           if (!bone) continue;
- 1125|           bone.getWorldPosition(v);
- 1126|           h.group.worldToLocal(v);
- 1127|           if (v.z < lo[k]) lo[k] = v.z;
- 1128|           if (v.z > hi[k]) hi[k] = v.z;
- 1129|           // "planted" = the foot is travelling BACKWARD relative to the body:
- 1130|           // that is exactly the half of the cycle the in-place gait calls stance.
- 1131|           if (havePrev[k] && v.z < prevZ[k]) {
- 1132|             backSamples[k]++;
- 1133|             if (v.z < backLo[k]) backLo[k] = v.z;
- 1134|             if (v.z > backHi[k]) backHi[k] = v.z;
- 1135|           }
- 1136|           prevZ[k] = v.z;
- 1137|           havePrev[k] = true;
- 1138|         }
- 1139|       }
- 1140|       const ranges = lo.map((l, k) => hi[k] - l);
- 1141|       const stanceFracs = backSamples.map((c) => c / N);
- 1142|       const stanceDisps = backLo.map((l, k) => Math.max(0, backHi[k] - l));
- 1143|       const range = ranges.reduce((a, b) => a + b, 0) / Math.max(1, ranges.length);
- 1144|       const stanceFrac = stanceFracs.reduce((a, b) => a + b, 0) / Math.max(1, stanceFracs.length);
- 1145|       const stanceDisp = stanceDisps.reduce((a, b) => a + b, 0) / Math.max(1, stanceDisps.length);
- 1146|       // Body advance per stance = the stance displacement, over a stance that
- 1147|       // lasts stanceFrac of the cycle. A cycle holds ONE stance per foot, so
- 1148|       // stride = stanceDisp / stanceFrac. (For a duty-0.5 gait that is the
- 1149|       // measured range itself, NOT range/0.5.)
- 1150|       const stride = stanceDisp / Math.max(0.05, stanceFrac);
- 1151|       void backSpan;
- 1152|       const f0 = tpl.feet[0];
- 1153|       const legReach = f0 ? tpl.bones[f0.chain[1]].pos.length() + tpl.bones[f0.chain[2]].pos.length() : 0;
- 1154|       out[id.toUpperCase()] = {
- 1155|         stride, range, height: tpl.height, kind: tpl.locomotion,
- 1156|         legReach: Math.round(legReach * 1e4) / 1e4,
- 1157|         factor: stride / tpl.height,
- 1158|         stanceFrac: Math.round(stanceFrac * 1e4) / 1e4,
- 1159|         stanceDisp: Math.round(stanceDisp * 1e4) / 1e4,
- 1160|         strideUserFormula: Math.round((range / Math.max(0.05, stanceFrac)) * 1e4) / 1e4,
- 1161|         feet: ranges.map((r) => Math.round(r * 1e4) / 1e4),
- 1162|       };
- 1163|       h.dispose();
- 1164|     }
- 1165|     return out;
- 1166|   }
- 1167| 
- 1168|   /**
- 1169|    * Integration step 5 — the BOP hop. A hopper has no legs to calibrate from, so
- 1170|    * the stride has to come from the ground it actually covers: drive a real BOP
- 1171|    * at walk throttle in a straight line and measure the distance per hop cycle.
- 1172|    */
- 1173|   hopProbe(seconds = 12, dt = 1 / 60): { hopDistance: number; cycles: number; hopsPerSecond: number; speed: number; stride: number; height: number; airTime: number } | null {
- 1174|     const a = this.agents.find((x) => x.template.locomotion === 'hop');
- 1175|     if (!a) return null;
- 1176|     const loco = a.motion.loco;
- 1177|     a.place(0, 3.0, 0);
- 1178|     const start = loco.pos.clone();
- 1179|     let cycles = 0;
- 1180|     let prev = loco.phase;
- 1181|     let dist = 0;
- 1182|     const px = { x: loco.pos.x, z: loco.pos.z };
- 1183|     let airTime = 0;
- 1184|     for (let i = 0; i < seconds / dt; i++) {
- 1185|       a.goTo({ x: 0, y: 0, z: 40 }, 0.42);
- 1186|       a.update(dt);
- 1187|       if (loco.phase < prev) cycles++;
- 1188|       prev = loco.phase;
- 1189|       dist += Math.hypot(loco.pos.x - px.x, loco.pos.z - px.z);
- 1190|       px.x = loco.pos.x; px.z = loco.pos.z;
- 1191|       // the airborne window of Juice.hopCurve is u in [0.18, 0.78]
- 1192|       const u = loco.phase;
- 1193|       if (u >= 0.18 && u <= 0.78) airTime += dt;
- 1194|     }
- 1195|     a.stop();
- 1196|     a.place(start.x, start.z, 0);
- 1197|     const hopDistance = cycles > 0 ? dist / cycles : 0;
- 1198|     return {
- 1199|       hopDistance: Math.round(hopDistance * 1e4) / 1e4,
- 1200|       cycles,
- 1201|       hopsPerSecond: Math.round((cycles / seconds) * 1e3) / 1e3,
- 1202|       speed: Math.round(loco.speed * 1e3) / 1e3,
- 1203|       stride: loco.cfg.stride,
- 1204|       height: a.template.height,
- 1205|       airTime: Math.round((airTime / Math.max(1, cycles)) * 1e3) / 1e3,
- 1206|     };
- 1207|   }
- 1208| 
- 1209|   quiet(): void {
- 1210|     this.brainEnabled = false;
- 1211|     for (const a of this.agents) { a.stop(); a.begin('none'); }
- 1212|     this.choreo.length = 0;
- 1213|   }
- 1214| 
- 1215|   loud(): void { this.brainEnabled = true; }
- 1216| 
- 1217|   /** One external hook so the wall-clock loop can keep tags and inspection
- 1218|    *  camera current without the Sim owning a render loop. */
- 1219|   tickUi(camera: THREE.PerspectiveCamera, dt: number): void {
- 1220|     this.tickTagTimer += dt;
- 1221|     if (this.tickTagTimer > 0.05) { this.tickTagTimer = 0; this.updateTags(); }
- 1222|     // inspect fly-in
- 1223|     const t = this.inspectTarget;
- 1224|     if (t && this.follow === t) {
- 1225|       this.inspectT = Math.min(1, this.inspectT + dt * 2.2);
- 1226|       const e = 1 - Math.pow(1 - this.inspectT, 3);
- 1227|       const want = new THREE.Vector3(t.pos.x + 1.5, t.pos.y + 0.85, t.pos.z + 1.9);
- 1228|       camera.position.lerp(want, e * 0.14);
- 1229|       this.stage.controls.target.lerp(new THREE.Vector3(t.pos.x, t.pos.y + 0.45, t.pos.z), e * 0.20);
- 1230|     }
- 1231|   }
- 1232| 
- 1233|   private tickTagTimer = 0;
- 1234| 
- 1235|   poseIdentity(frames = 180, dt = 1 / 60): { maxQuat: number; maxPos: number; bones: number; seconds: number } {
- 1236|     const pal = paletteAt(0);
- 1237|     const colors = {
- 1238|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
- 1239|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
- 1240|     };
- 1241|     const tpl = buildHeroTemplate(HERO_IDS[0], colors);
- 1242|     const hA = buildHero(tpl, pal);
- 1243|     const hB = buildHero(tpl, pal);
- 1244|     const aA = new HeroAnimator(tpl, hA);
- 1245|     const aB = new HeroAnimator(tpl, hB);
- 1246|     aA.deterministic = true;
- 1247|     aB.deterministic = true;
- 1248|     aA.setGait(0);
- 1249|     aB.beginDrive();
- 1250|     aA.setClock(12);
+ 1001|         a.rig.axes.limb = ok ? (Math.abs(fx) >= Math.abs(fz) ? 'x' : 'z') : ax0;
+ 1002|         out[sp].evidence.limb = ok
+ 1003|           ? `verified axis '${a.rig.axes.limb}': x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd`
+ 1004|           : `UNVERIFIED axis: x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd (threshold ${THRESH.toFixed(4)})`;
+ 1005|         out[sp].limb = ok ? (a.rig.axes.limb === 'x' ? 1 : 2) : null;
+ 1006|         a.debugPose = 0;
+ 1007|       }
+ 1008|     }
+ 1009|     this.brainEnabled = prevBrain;
+ 1010|     return out;
+ 1011|   }
+ 1012| 
+ 1013|   /**
+ 1014|    * v11 joint-rate probe: the worst angular rate per species, the BONE it lands
+ 1015|    * on, and the planting state of that leg at the peak frame, so a pop can be
+ 1016|    * attributed instead of guessed at.
+ 1017|    */
+ 1018|   jointProbe(seconds = 20, dt = 1 / 60): Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> {
+ 1019|     const out: Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> = {};
+ 1020|     const prevBrain = this.brainEnabled;
+ 1021|     this.brainEnabled = true;
+ 1022|     const prev = new Map<number, { q: number[]; mode: string; forced: boolean }[]>();
+ 1023|     for (let i = 0; i < seconds / dt; i++) {
+ 1024|       this.step(dt);
+ 1025|       for (const a of this.agents) {
+ 1026|         const sp = a.template.name.split(' ')[0];
+ 1027|         const st = a.hero.legState();
+ 1028|         const cur = a.handle.bones.map((b) => ({
+ 1029|           q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
+ 1030|           mode: '', forced: false,
+ 1031|         }));
+ 1032|         const pv = prev.get(a.id);
+ 1033|         if (pv) {
+ 1034|           for (const L of a.template.feet) {
+ 1035|             for (let k = 0; k < 3; k++) {
+ 1036|               const bi = L.chain[k];
+ 1037|               const qa = pv[bi], qb = cur[bi];
+ 1038|               const dot = Math.abs(qa.q[0] * qb.q[0] + qa.q[1] * qb.q[1] + qa.q[2] * qb.q[2] + qa.q[3] * qb.q[3]);
+ 1039|               const rate = (2 * Math.acos(Math.min(1, dot))) / dt;
+ 1040|               const st0 = st.find((x) => x.index === a.template.feet.indexOf(L));
+ 1041|               if (rate > (out[sp]?.rate ?? 0)) {
+ 1042|                 out[sp] = {
+ 1043|                   rate: Math.round(rate * 100) / 100,
+ 1044|                   bone: a.handle.bones[bi].name,
+ 1045|                   frameType: (st0?.mode ?? 'plant') === 'swing'
+ 1046|                     ? (st0?.forced ? 'early-lift (reach/turn/drift guard)' : 'normal swing')
+ 1047|                     : 'plant',
+ 1048|                   wasForced: !!st0?.forced,
+ 1049|                 };
+ 1050|               }
+ 1051|             }
+ 1052|           }
+ 1053|         }
+ 1054|         prev.set(a.id, cur);
+ 1055|       }
+ 1056|     }
+ 1057|     this.brainEnabled = prevBrain;
+ 1058|     return out;
+ 1059|   }
+ 1060| 
+ 1061|   /**
+ 1062|    * v11 cadence ramp: walk -> run -> walk, sampling the REAL cycle frequency in
+ 1063|    * short windows so a pop at the gait transition would show up as a jump.
+ 1064|    */
+ 1065|   freqRampProbe(sp = 'PIP'): { t: number; speed: number; freq: number; stride: number }[] {
+ 1066|     const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
+ 1067|     if (!a) return [];
+ 1068|     const prevB = this.brainEnabled;
+ 1069|     this.brainEnabled = false;
+ 1070|     for (const o of this.agents) { o.stop(); o.debugPose = 0; }
+ 1071|     a.place(0, -6, 0);
+ 1072|     const dt = 1 / 60;
+ 1073|     for (let i = 0; i < 60; i++) { a.goTo({ x: 0, y: 0, z: 60 }, 0.4); a.update(dt); }
+ 1074|     const rows: { t: number; speed: number; freq: number; stride: number }[] = [];
+ 1075|     const total = 900;
+ 1076|     let cycle = 0, lastPhase = a.motion.loco.phase, speedSum = 0, win = 0;
+ 1077|     for (let i = 0; i < total; i++) {
+ 1078|       // 0 -> 1 -> 0 over the run
+ 1079|       const k = i / total;
+ 1080|       const th = k < 0.5 ? k * 2 : (1 - k) * 2;
+ 1081|       a.goTo({ x: 0, y: 0, z: 200 }, Math.max(0.35, th));
+ 1082|       a.update(dt);
+ 1083|       speedSum += a.motion.loco.speed; win++;
+ 1084|       if (a.motion.loco.phase < lastPhase) cycle++;
+ 1085|       lastPhase = a.motion.loco.phase;
+ 1086|       if (win >= 60) {
+ 1087|         const loco = a.motion.loco;
+ 1088|         rows.push({
+ 1089|           t: Math.round(i * dt * 10) / 10,
+ 1090|           speed: Math.round((speedSum / win) * 1e3) / 1e3,
+ 1091|           freq: Math.round((cycle / win) * 60 * 1e3) / 1e3,
+ 1092|           stride: Math.round(loco.cfg.stride * (1 + 0.4 * loco.runT()) * 1e4) / 1e4,
+ 1093|         });
+ 1094|         cycle = 0; speedSum = 0; win = 0;
+ 1095|       }
+ 1096|     }
+ 1097|     this.brainEnabled = prevB;
+ 1098|     return rows;
+ 1099|   }
+ 1100| 
+ 1101|   static compare = compare;
+ 1102| 
+ 1103|   /**
+ 1104|    * Integration step 4 — stride calibration. Drive each species' pedestal
+ 1105|    * animator with an external gait cycle at 0.6 and measure how far the REAL
+ 1106|    * ankle bones travel forward in body space over one full cycle. The gait
+ 1107|    * cycle advances `stride` per cycle, so `stride = range / 0.5`.
+ 1108|    */
+ 1109|   strideProbe(): Record<string, {
+ 1110|     stride: number; range: number; height: number; kind: string; factor: number; legReach: number;
+ 1111|     stanceFrac: number; stanceDisp: number; strideUserFormula: number; feet: number[];
+ 1112|   }> {
+ 1113|     const out: Record<string, {
+ 1114|       stride: number; range: number; height: number; kind: string; factor: number; legReach: number;
+ 1115|       stanceFrac: number; stanceDisp: number; strideUserFormula: number; feet: number[];
+ 1116|     }> = {};
+ 1117|     const pal = paletteAt(0);
+ 1118|     const colors = {
+ 1119|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
+ 1120|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
+ 1121|     };
+ 1122|     const v = new THREE.Vector3();
+ 1123|     for (const id of HERO_IDS) {
+ 1124|       const tpl = buildHeroTemplate(id, colors);
+ 1125|       const h = buildHero(tpl, pal);
+ 1126|       const anim = new HeroAnimator(tpl, h);
+ 1127|       anim.deterministic = true;
+ 1128|       h.group.position.set(0, 0, 0);
+ 1129|       h.group.rotation.set(0, 0, 0);
+ 1130|       const n = tpl.feet.length;
+ 1131|       const lo = new Array<number>(n).fill(1e9);
+ 1132|       const hi = new Array<number>(n).fill(-1e9);
+ 1133|       const backSamples = new Array<number>(n).fill(0);
+ 1134|       const backSpan = new Array<number>(n).fill(0);
+ 1135|       const backLo = new Array<number>(n).fill(1e9);
+ 1136|       const backHi = new Array<number>(n).fill(-1e9);
+ 1137|       const N = 480;
+ 1138|       const prevZ = new Array<number>(n).fill(0);
+ 1139|       const havePrev = new Array<boolean>(n).fill(false);
+ 1140|       for (let i = 0; i < N; i++) {
+ 1141|         anim.setGait(0.6, i / N);
+ 1142|         anim.update(1 / 60, null);
+ 1143|         h.group.updateMatrixWorld(true);
+ 1144|         for (let k = 0; k < n; k++) {
+ 1145|           const bone = h.bones[tpl.feet[k].chain[2]];
+ 1146|           if (!bone) continue;
+ 1147|           bone.getWorldPosition(v);
+ 1148|           h.group.worldToLocal(v);
+ 1149|           if (v.z < lo[k]) lo[k] = v.z;
+ 1150|           if (v.z > hi[k]) hi[k] = v.z;
+ 1151|           // "planted" = the foot is travelling BACKWARD relative to the body:
+ 1152|           // that is exactly the half of the cycle the in-place gait calls stance.
+ 1153|           if (havePrev[k] && v.z < prevZ[k]) {
+ 1154|             backSamples[k]++;
+ 1155|             if (v.z < backLo[k]) backLo[k] = v.z;
+ 1156|             if (v.z > backHi[k]) backHi[k] = v.z;
+ 1157|           }
+ 1158|           prevZ[k] = v.z;
+ 1159|           havePrev[k] = true;
+ 1160|         }
+ 1161|       }
+ 1162|       const ranges = lo.map((l, k) => hi[k] - l);
+ 1163|       const stanceFracs = backSamples.map((c) => c / N);
+ 1164|       const stanceDisps = backLo.map((l, k) => Math.max(0, backHi[k] - l));
+ 1165|       const range = ranges.reduce((a, b) => a + b, 0) / Math.max(1, ranges.length);
+ 1166|       const stanceFrac = stanceFracs.reduce((a, b) => a + b, 0) / Math.max(1, stanceFracs.length);
+ 1167|       const stanceDisp = stanceDisps.reduce((a, b) => a + b, 0) / Math.max(1, stanceDisps.length);
+ 1168|       // Body advance per stance = the stance displacement, over a stance that
+ 1169|       // lasts stanceFrac of the cycle. A cycle holds ONE stance per foot, so
+ 1170|       // stride = stanceDisp / stanceFrac. (For a duty-0.5 gait that is the
+ 1171|       // measured range itself, NOT range/0.5.)
+ 1172|       const stride = stanceDisp / Math.max(0.05, stanceFrac);
+ 1173|       void backSpan;
+ 1174|       const f0 = tpl.feet[0];
+ 1175|       const legReach = f0 ? tpl.bones[f0.chain[1]].pos.length() + tpl.bones[f0.chain[2]].pos.length() : 0;
+ 1176|       out[id.toUpperCase()] = {
+ 1177|         stride, range, height: tpl.height, kind: tpl.locomotion,
+ 1178|         legReach: Math.round(legReach * 1e4) / 1e4,
+ 1179|         factor: stride / tpl.height,
+ 1180|         stanceFrac: Math.round(stanceFrac * 1e4) / 1e4,
+ 1181|         stanceDisp: Math.round(stanceDisp * 1e4) / 1e4,
+ 1182|         strideUserFormula: Math.round((range / Math.max(0.05, stanceFrac)) * 1e4) / 1e4,
+ 1183|         feet: ranges.map((r) => Math.round(r * 1e4) / 1e4),
+ 1184|       };
+ 1185|       h.dispose();
+ 1186|     }
+ 1187|     return out;
+ 1188|   }
+ 1189| 
+ 1190|   /**
+ 1191|    * Integration step 5 — the BOP hop. A hopper has no legs to calibrate from, so
+ 1192|    * the stride has to come from the ground it actually covers: drive a real BOP
+ 1193|    * at walk throttle in a straight line and measure the distance per hop cycle.
+ 1194|    */
+ 1195|   hopProbe(seconds = 12, dt = 1 / 60): { hopDistance: number; cycles: number; hopsPerSecond: number; speed: number; stride: number; height: number; airTime: number } | null {
+ 1196|     const a = this.agents.find((x) => x.template.locomotion === 'hop');
+ 1197|     if (!a) return null;
+ 1198|     const loco = a.motion.loco;
+ 1199|     a.place(0, 3.0, 0);
+ 1200|     const start = loco.pos.clone();
+ 1201|     let cycles = 0;
+ 1202|     let prev = loco.phase;
+ 1203|     let dist = 0;
+ 1204|     const px = { x: loco.pos.x, z: loco.pos.z };
+ 1205|     let airTime = 0;
+ 1206|     for (let i = 0; i < seconds / dt; i++) {
+ 1207|       a.goTo({ x: 0, y: 0, z: 40 }, 0.42);
+ 1208|       a.update(dt);
+ 1209|       if (loco.phase < prev) cycles++;
+ 1210|       prev = loco.phase;
+ 1211|       dist += Math.hypot(loco.pos.x - px.x, loco.pos.z - px.z);
+ 1212|       px.x = loco.pos.x; px.z = loco.pos.z;
+ 1213|       // the airborne window of Juice.hopCurve is u in [0.18, 0.78]
+ 1214|       const u = loco.phase;
+ 1215|       if (u >= 0.18 && u <= 0.78) airTime += dt;
+ 1216|     }
+ 1217|     a.stop();
+ 1218|     a.place(start.x, start.z, 0);
+ 1219|     const hopDistance = cycles > 0 ? dist / cycles : 0;
+ 1220|     return {
+ 1221|       hopDistance: Math.round(hopDistance * 1e4) / 1e4,
+ 1222|       cycles,
+ 1223|       hopsPerSecond: Math.round((cycles / seconds) * 1e3) / 1e3,
+ 1224|       speed: Math.round(loco.speed * 1e3) / 1e3,
+ 1225|       stride: loco.cfg.stride,
+ 1226|       height: a.template.height,
+ 1227|       airTime: Math.round((airTime / Math.max(1, cycles)) * 1e3) / 1e3,
+ 1228|     };
+ 1229|   }
+ 1230| 
+ 1231|   quiet(): void {
+ 1232|     this.brainEnabled = false;
+ 1233|     for (const a of this.agents) { a.stop(); a.begin('none'); }
+ 1234|     this.choreo.length = 0;
+ 1235|   }
+ 1236| 
+ 1237|   loud(): void { this.brainEnabled = true; }
+ 1238| 
+ 1239|   /** One external hook so the wall-clock loop can keep tags and inspection
+ 1240|    *  camera current without the Sim owning a render loop. */
+ 1241|   tickUi(camera: THREE.PerspectiveCamera, dt: number): void {
+ 1242|     this.tickTagTimer += dt;
+ 1243|     if (this.tickTagTimer > 0.05) { this.tickTagTimer = 0; this.updateTags(); }
+ 1244|     // inspect fly-in
+ 1245|     const t = this.inspectTarget;
+ 1246|     if (t && this.follow === t) {
+ 1247|       this.inspectT = Math.min(1, this.inspectT + dt * 2.2);
+ 1248|       const e = 1 - Math.pow(1 - this.inspectT, 3);
+ 1249|       const want = new THREE.Vector3(t.pos.x + 1.5, t.pos.y + 0.85, t.pos.z + 1.9);
+ 1250|       camera.position.lerp(want, e * 0.14);

@@ -1,250 +1,250 @@
-  501|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
-  502|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 0.55, 0, pos.z - Math.cos(ang) * 0.55);
-  503|       spot.y = heightAt(spot.x, spot.z);
-  504|       a.goTo(spot, 1);
-  505|       a.mood = 'surprised';
-  506|       const b = this.brains.get(a.id);
-  507|       if (b) { b.action = 'eat'; b.actionAge = 0; b.needs.hunger = Math.min(1, b.needs.hunger + 0.2); }
-  508|       if (i === 0) {
-  509|         this.hold(winner, 5.0);
-  510|         this.pushEvent('feed', a);
-  511|       } else {
-  512|         this.hold(a, 5.0);
-  513|         this.pushEvent('feed_late', a);
-  514|       }
-  515|     });
-  516| 
-  517|     // the winner's full meal: sniff -> three chomps -> squint + wiggle + note
-  518|     this.after(1.3, () => {
-  519|       if (!winner.alive) return;
-  520|       winner.stop();
-  521|       winner.begin('sniff');
-  522|       winner.say('bang', 0.8);
-  523|     });
-  524|     this.after(2.3, () => {
-  525|       if (!winner.alive) return;
-  526|       winner.begin('chomp');
-  527|       winner.mood = 'happy';
-  528|       this.eatNearestBush(winner);
-  529|     });
-  530|     for (let i = 0; i < 3; i++) {
-  531|       this.after(2.4 + i * 0.55, () => {
-  532|         if (!winner.alive) return;
-  533|         winner.cheer();
-  534|         this.vfx.puff(winner.pos.x, winner.pos.y + 0.3, winner.pos.z, 4, { life: 0.35, size: 0.05, spread: 0.7, up: 0.8, color: '#ffd9e2' });
-  535|       });
-  536|     }
-  537|     this.after(4.1, () => {
-  538|       if (!winner.alive) return;
-  539|       winner.begin('eat');
-  540|       winner.mood = 'happy';
-  541|       winner.say('note', 1.6, 1.3);
-  542|       winner.wiggle = 1;
-  543|       this.hold(winner, 1.2);
-  544|     });
-  545|     this.after(5.2, () => { if (winner.alive) winner.mood = 'neutral'; });
-  546| 
-  547|     // late arrivals get nothing and they know it
-  548|     for (const a of sorted.slice(1)) {
-  549|       this.after(2.0, () => {
-  550|         if (!a.alive) return;
-  551|         a.mood = 'sad';
-  552|         a.say('question', 1.6, 1.2);
-  553|         a.stop();
-  554|       });
-  555|       this.after(3.8, () => { if (a.alive) a.mood = 'neutral'; });
-  556|     }
-  557|   }
-  558| 
-  559|   private eatNearestBush(a: Agent): void {
-  560|     const i = this.world.props.nearestFruitingBush(a.pos, 12);
-  561|     if (i >= 0) this.world.props.eat(i);
-  562|   }
-  563| 
-  564|   /** Hurl the ball. It bounces, rolls with spin, and creatures chase it. */
-  565|   throwBall(pos: THREE.Vector3): void {
-  566|     const b = this.world.props.ball;
-  567|     const d = new THREE.Vector3(pos.x - b.pos.x, 0, pos.z - b.pos.z);
-  568|     const dist = Math.min(9, d.length());
-  569|     if (dist < 0.01) return;
-  570|     d.normalize();
-  571|     b.vel.set(d.x * dist * 0.95, 0, d.z * dist * 0.95);
-  572|     b.vel.clampLength(0, 7);
-  573|     this.vfx.puff(b.pos.x, b.pos.y, b.pos.z, 8, { life: 0.4, size: 0.06, spread: 1.0, up: 0.9, color: '#e8f4ff' });
-  574|     this.pushEvent('ball', this.agents[0] ?? ({ name: 'player' } as Agent));
-  575| 
-  576|     // up to five creatures pile onto the chase
-  577|     const chasers = [...this.agents]
-  578|       .sort((x, y) => x.pos.distanceTo(b.pos) - y.pos.distanceTo(b.pos))
-  579|       .slice(0, 5);
-  580|     for (const a of chasers) {
-  581|       a.mood = 'happy';
-  582|       this.hold(a, 4.0);
-  583|       const bb = this.brains.get(a.id);
-  584|       if (bb) { bb.action = 'pushBall'; bb.actionAge = 0; }
-  585|       this.after(0.15, () => { if (a.alive) a.say('bang', 0.9); });
-  586|     }
-  587|   }
-  588| 
-  589|   pet(a: Agent): void {
-  590|     if (this.petting && this.petting !== a) this.endPet();
-  591|     this.petting = a;
-  592|     this.petHold = 0;
-  593|     a.stop();
-  594|     a.mood = 'happy';
-  595|     a.motion.petStart();
-  596|     a.say('heart', 1.5, 1.25);
-  597|     this.vfx.ring(a.pos.x, a.pos.y, a.pos.z, { r0: 0.2, r1: 1.4, life: 0.6, color: '#ffc2d6' });
-  598|     this.pushEvent('pet', a);
-  599|   }
-  600| 
-  601|   /** Keep the pet leaning into the cursor: the caller passes the ground point. */
-  602|   aimPet(cursor: THREE.Vector3): void {
-  603|     if (!this.petting) return;
-  604|     this.petting.faceTarget = { x: cursor.x, z: cursor.z };
-  605|   }
-  606| 
-  607|   endPet(): void {
-  608|     const a = this.petting;
-  609|     this.petting = null;
-  610|     this.petHold = 0;
-  611|     if (!a) return;
-  612|     a.motion.petEnd();
-  613|     a.mood = 'happy';
-  614|     a.say('heart', 1.2, 1.15);
-  615|     this.after(1.6, () => { if (a.alive) a.mood = 'neutral'; });
-  616|   }
-  617| 
-  618|   /** Lift a creature: the motion layer dangles it and flails its limbs. */
-  619|   pickUp(a: Agent): void {
-  620|     if (this.carried) this.drop();
-  621|     this.carried = a;
-  622|     a.carried = true;
-  623|     a.stop();
-  624|     a.mood = 'dizzy';
-  625|     a.motion.pickUp(this.carryPoint(new THREE.Vector3()));
-  626|     this.vfx.ring(a.pos.x, a.pos.y, a.pos.z, { r0: 0.2, r1: 1.6, life: 0.6, color: '#dfeaff' });
-  627|     this.pushEvent('pickup', a);
-  628|   }
-  629| 
-  630|   /** Where the cursor is holding the creature: in front of the camera. */
-  631|   private carryPoint(out: THREE.Vector3): THREE.Vector3 {
-  632|     const dir = new THREE.Vector3();
-  633|     this.stage.camera.getWorldDirection(dir);
-  634|     out.copy(this.stage.camera.position).addScaledVector(dir, 2.6);
-  635|     out.y = Math.max(heightAt(out.x, out.z), 0) + 0.95 + Math.sin(this.world.elapsed * 6.5) * 0.06;
-  636|     return out;
-  637|   }
-  638| 
-  639|   /** Motion-layer effects -> the Sim's Vfx pool. */
-  640|   private motionVfx(kind: string, x: number, y: number, z: number, scale = 1): void {
-  641|     switch (kind) {
-  642|       case 'dust': this.vfx.dust(x, y, z, 0.4 + scale * 0.5); break;
-  643|       case 'dustRing':
-  644|         this.vfx.ring(x, y, z, { r0: 0.15, r1: 1.5 * scale, life: 0.6, color: '#efe4cb' });
-  645|         break;
-  646|       case 'flash':
-  647|         this.vfx.ring(x, y, z, { r0: 0.1, r1: 1.1 * scale, life: 0.45, color: '#fff6cf' });
-  648|         this.vfx.puff(x, y + 0.12, z, 10, { life: 0.5, size: 0.07, spread: 1.2, up: 1.0, color: '#fff6cf' });
-  649|         break;
-  650|       case 'crumbs':
-  651|         this.vfx.puff(x, y + 0.28, z, 6, { life: 0.5, size: 0.05, spread: 0.8, up: 1.0, color: '#ffd9e2' });
-  652|         break;
-  653|       default:
-  654|         this.vfx.ring(x, y, z, { r0: 0.15, r1: 1.2 * scale, life: 0.5, color: '#ffffff' });
-  655|         break;
-  656|     }
-  657|   }
-  658| 
-  659|   /** Fling velocity, tracked by the pointer and handed down on release. */
-  660|   setCarryVelocity(v: THREE.Vector3): void { this.carryVel.copy(v); }
-  661| 
-  662|   drop(at?: THREE.Vector3): void {
-  663|     const a = this.carried;
-  664|     if (!a) return;
-  665|     a.carried = false;
-  666|     a.mood = 'dizzy';
-  667|     this.carried = null;
-  668| 
-  669|     // up in the air with the fling velocity: the motion layer's Dangle carries
-  670|     // it down, and its own landDizzy takes over on the landing frame
-  671|     if (at) {
-  672|       const y = Math.max(at.y, heightAt(at.x, at.z) + 0.6);
-  673|       a.motion.dangle.pos.set(at.x, y, at.z);
-  674|       a.motion.grabPoint = null;
-  675|       a.motion.drop(new THREE.Vector3(0, 0, 0));
-  676|     } else {
-  677|       const rr = Math.hypot(a.pos.x + this.carryVel.x * 0.35, a.pos.z + this.carryVel.z * 0.35);
-  678|       const k = rr > WALK_R ? WALK_R / rr : 1;
-  679|       a.motion.drop(new THREE.Vector3(this.carryVel.x * 0.35 * k, 0, this.carryVel.z * 0.35 * k));
-  680|     }
-  681| 
-  682|     // the landing squash, the dust ring and the dizzy stars are the motion
-  683|     // layer's own landDizzy action — the Sim keeps only the mood and the
-  684|     // shake-off puff at the end
-  685|     this.hold(a, 4.4);
-  686|     this.after(2.0, () => {
-  687|       if (!a.alive) return;
-  688|       a.mood = 'neutral';
-  689|       this.vfx.puff(a.pos.x, a.pos.y + 0.4, a.pos.z, 8, { life: 0.4, size: 0.05, spread: 1.2, up: 0.9, color: '#ffffff' });
-  690|     });
-  691|     // a playful creature hops straight back for another go
-  692|     if (a.trait('playful') > 0.55) {
-  693|       this.after(2.6, () => {
-  694|         if (!a.alive) return;
-  695|         a.mood = 'happy';
-  696|         a.say('note', 1.4, 1.2);
-  697|         a.faceTarget = { x: this.stage.camera.position.x, z: this.stage.camera.position.z };
-  698|         a.goTo({ x: this.stage.camera.position.x, y: 0, z: this.stage.camera.position.z }, 0.5);
-  699|       });
-  700|     }
-  701|     this.pushEvent('drop', a);
-  702|   }
+  501|    */
+  502|   dropBerry(pos: THREE.Vector3): void {
+  503|     const mesh = new THREE.Mesh(this.berryGeo, MAT.lit);
+  504|     mesh.name = 'droppedBerry';
+  505|     mesh.position.set(pos.x, heightAt(pos.x, pos.z) + 1.6, pos.z);
+  506|     const rng = this.rng;
+  507|     mesh.userData.vx = (rng() - 0.5) * 0.6;
+  508|     this.stage.scene.add(mesh);
+  509|     this.drops.push({
+  510|       mesh,
+  511|       vel: new THREE.Vector3((rng() - 0.5) * 0.7, 0, (rng() - 0.5) * 0.7),
+  512|       life: 26,
+  513|     });
+  514|     this.vfx.ring(pos.x, heightAt(pos.x, pos.z), pos.z, { r0: 0.1, r1: 1.0, life: 0.5, color: '#ffc6d2' });
+  515| 
+  516|     const sorted = [...this.agents]
+  517|       .sort((a, b) => a.pos.distanceTo(pos) - b.pos.distanceTo(pos))
+  518|       .slice(0, 4);
+  519|     if (!sorted.length) return;
+  520| 
+  521|     const winner = sorted[0];
+  522|     sorted.forEach((a, i) => {
+  523|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
+  524|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 0.55, 0, pos.z - Math.cos(ang) * 0.55);
+  525|       spot.y = heightAt(spot.x, spot.z);
+  526|       a.goTo(spot, 1);
+  527|       a.mood = 'surprised';
+  528|       const b = this.brains.get(a.id);
+  529|       if (b) { b.action = 'eat'; b.actionAge = 0; b.needs.hunger = Math.min(1, b.needs.hunger + 0.2); }
+  530|       if (i === 0) {
+  531|         this.hold(winner, 5.0);
+  532|         this.pushEvent('feed', a);
+  533|       } else {
+  534|         this.hold(a, 5.0);
+  535|         this.pushEvent('feed_late', a);
+  536|       }
+  537|     });
+  538| 
+  539|     // the winner's full meal: sniff -> three chomps -> squint + wiggle + note
+  540|     this.after(1.3, () => {
+  541|       if (!winner.alive) return;
+  542|       winner.stop();
+  543|       winner.begin('sniff');
+  544|       winner.say('bang', 0.8);
+  545|     });
+  546|     this.after(2.3, () => {
+  547|       if (!winner.alive) return;
+  548|       winner.begin('chomp');
+  549|       winner.mood = 'happy';
+  550|       this.eatNearestBush(winner);
+  551|     });
+  552|     for (let i = 0; i < 3; i++) {
+  553|       this.after(2.4 + i * 0.55, () => {
+  554|         if (!winner.alive) return;
+  555|         winner.cheer();
+  556|         this.vfx.puff(winner.pos.x, winner.pos.y + 0.3, winner.pos.z, 4, { life: 0.35, size: 0.05, spread: 0.7, up: 0.8, color: '#ffd9e2' });
+  557|       });
+  558|     }
+  559|     this.after(4.1, () => {
+  560|       if (!winner.alive) return;
+  561|       winner.begin('eat');
+  562|       winner.mood = 'happy';
+  563|       winner.say('note', 1.6, 1.3);
+  564|       winner.wiggle = 1;
+  565|       this.hold(winner, 1.2);
+  566|     });
+  567|     this.after(5.2, () => { if (winner.alive) winner.mood = 'neutral'; });
+  568| 
+  569|     // late arrivals get nothing and they know it
+  570|     for (const a of sorted.slice(1)) {
+  571|       this.after(2.0, () => {
+  572|         if (!a.alive) return;
+  573|         a.mood = 'sad';
+  574|         a.say('question', 1.6, 1.2);
+  575|         a.stop();
+  576|       });
+  577|       this.after(3.8, () => { if (a.alive) a.mood = 'neutral'; });
+  578|     }
+  579|   }
+  580| 
+  581|   private eatNearestBush(a: Agent): void {
+  582|     const i = this.world.props.nearestFruitingBush(a.pos, 12);
+  583|     if (i >= 0) this.world.props.eat(i);
+  584|   }
+  585| 
+  586|   /** Hurl the ball. It bounces, rolls with spin, and creatures chase it. */
+  587|   throwBall(pos: THREE.Vector3): void {
+  588|     const b = this.world.props.ball;
+  589|     const d = new THREE.Vector3(pos.x - b.pos.x, 0, pos.z - b.pos.z);
+  590|     const dist = Math.min(9, d.length());
+  591|     if (dist < 0.01) return;
+  592|     d.normalize();
+  593|     b.vel.set(d.x * dist * 0.95, 0, d.z * dist * 0.95);
+  594|     b.vel.clampLength(0, 7);
+  595|     this.vfx.puff(b.pos.x, b.pos.y, b.pos.z, 8, { life: 0.4, size: 0.06, spread: 1.0, up: 0.9, color: '#e8f4ff' });
+  596|     this.pushEvent('ball', this.agents[0] ?? ({ name: 'player' } as Agent));
+  597| 
+  598|     // up to five creatures pile onto the chase
+  599|     const chasers = [...this.agents]
+  600|       .sort((x, y) => x.pos.distanceTo(b.pos) - y.pos.distanceTo(b.pos))
+  601|       .slice(0, 5);
+  602|     for (const a of chasers) {
+  603|       a.mood = 'happy';
+  604|       this.hold(a, 4.0);
+  605|       const bb = this.brains.get(a.id);
+  606|       if (bb) { bb.action = 'pushBall'; bb.actionAge = 0; }
+  607|       this.after(0.15, () => { if (a.alive) a.say('bang', 0.9); });
+  608|     }
+  609|   }
+  610| 
+  611|   pet(a: Agent): void {
+  612|     if (this.petting && this.petting !== a) this.endPet();
+  613|     this.petting = a;
+  614|     this.petHold = 0;
+  615|     a.stop();
+  616|     a.mood = 'happy';
+  617|     a.motion.petStart();
+  618|     a.say('heart', 1.5, 1.25);
+  619|     this.vfx.ring(a.pos.x, a.pos.y, a.pos.z, { r0: 0.2, r1: 1.4, life: 0.6, color: '#ffc2d6' });
+  620|     this.pushEvent('pet', a);
+  621|   }
+  622| 
+  623|   /** Keep the pet leaning into the cursor: the caller passes the ground point. */
+  624|   aimPet(cursor: THREE.Vector3): void {
+  625|     if (!this.petting) return;
+  626|     this.petting.faceTarget = { x: cursor.x, z: cursor.z };
+  627|   }
+  628| 
+  629|   endPet(): void {
+  630|     const a = this.petting;
+  631|     this.petting = null;
+  632|     this.petHold = 0;
+  633|     if (!a) return;
+  634|     a.motion.petEnd();
+  635|     a.mood = 'happy';
+  636|     a.say('heart', 1.2, 1.15);
+  637|     this.after(1.6, () => { if (a.alive) a.mood = 'neutral'; });
+  638|   }
+  639| 
+  640|   /** Lift a creature: the motion layer dangles it and flails its limbs. */
+  641|   pickUp(a: Agent): void {
+  642|     if (this.carried) this.drop();
+  643|     this.carried = a;
+  644|     a.carried = true;
+  645|     a.stop();
+  646|     a.mood = 'dizzy';
+  647|     a.motion.pickUp(this.carryPoint(new THREE.Vector3()));
+  648|     this.vfx.ring(a.pos.x, a.pos.y, a.pos.z, { r0: 0.2, r1: 1.6, life: 0.6, color: '#dfeaff' });
+  649|     this.pushEvent('pickup', a);
+  650|   }
+  651| 
+  652|   /** Where the cursor is holding the creature: in front of the camera. */
+  653|   private carryPoint(out: THREE.Vector3): THREE.Vector3 {
+  654|     const dir = new THREE.Vector3();
+  655|     this.stage.camera.getWorldDirection(dir);
+  656|     out.copy(this.stage.camera.position).addScaledVector(dir, 2.6);
+  657|     out.y = Math.max(heightAt(out.x, out.z), 0) + 0.95 + Math.sin(this.world.elapsed * 6.5) * 0.06;
+  658|     return out;
+  659|   }
+  660| 
+  661|   /** Motion-layer effects -> the Sim's Vfx pool. */
+  662|   private motionVfx(kind: string, x: number, y: number, z: number, scale = 1): void {
+  663|     switch (kind) {
+  664|       case 'dust': this.vfx.dust(x, y, z, 0.4 + scale * 0.5); break;
+  665|       case 'dustRing':
+  666|         this.vfx.ring(x, y, z, { r0: 0.15, r1: 1.5 * scale, life: 0.6, color: '#efe4cb' });
+  667|         break;
+  668|       case 'flash':
+  669|         this.vfx.ring(x, y, z, { r0: 0.1, r1: 1.1 * scale, life: 0.45, color: '#fff6cf' });
+  670|         this.vfx.puff(x, y + 0.12, z, 10, { life: 0.5, size: 0.07, spread: 1.2, up: 1.0, color: '#fff6cf' });
+  671|         break;
+  672|       case 'crumbs':
+  673|         this.vfx.puff(x, y + 0.28, z, 6, { life: 0.5, size: 0.05, spread: 0.8, up: 1.0, color: '#ffd9e2' });
+  674|         break;
+  675|       default:
+  676|         this.vfx.ring(x, y, z, { r0: 0.15, r1: 1.2 * scale, life: 0.5, color: '#ffffff' });
+  677|         break;
+  678|     }
+  679|   }
+  680| 
+  681|   /** Fling velocity, tracked by the pointer and handed down on release. */
+  682|   setCarryVelocity(v: THREE.Vector3): void { this.carryVel.copy(v); }
+  683| 
+  684|   drop(at?: THREE.Vector3): void {
+  685|     const a = this.carried;
+  686|     if (!a) return;
+  687|     a.carried = false;
+  688|     a.mood = 'dizzy';
+  689|     this.carried = null;
+  690| 
+  691|     // up in the air with the fling velocity: the motion layer's Dangle carries
+  692|     // it down, and its own landDizzy takes over on the landing frame
+  693|     if (at) {
+  694|       const y = Math.max(at.y, heightAt(at.x, at.z) + 0.6);
+  695|       a.motion.dangle.pos.set(at.x, y, at.z);
+  696|       a.motion.grabPoint = null;
+  697|       a.motion.drop(new THREE.Vector3(0, 0, 0));
+  698|     } else {
+  699|       const rr = Math.hypot(a.pos.x + this.carryVel.x * 0.35, a.pos.z + this.carryVel.z * 0.35);
+  700|       const k = rr > WALK_R ? WALK_R / rr : 1;
+  701|       a.motion.drop(new THREE.Vector3(this.carryVel.x * 0.35 * k, 0, this.carryVel.z * 0.35 * k));
+  702|     }
   703| 
-  704|   /** Inspect: an eased camera fly-in, and the creature notices and waves. */
-  705|   inspect(a: Agent): void {
-  706|     this.selected = a;
-  707|     this.follow = a;
-  708|     this.inspectTarget = a;
-  709|     this.inspectT = 0;
-  710|     a.mood = 'happy';
-  711|     this.after(0.7, () => {
-  712|       if (!a.alive) return;
-  713|       a.begin('wave');
-  714|       a.say('note', 1.5, 1.2);
-  715|       a.faceTarget = { x: this.stage.camera.position.x, z: this.stage.camera.position.z };
-  716|     });
-  717|     this.after(3.0, () => { if (a.alive) { a.mood = 'neutral'; a.begin('none'); } });
-  718|     this.pushEvent('inspect', a);
-  719|   }
-  720| 
-  721|   endInspect(): void {
-  722|     this.selected = null;
-  723|     this.follow = null;
-  724|     this.inspectTarget = null;
-  725|   }
-  726| 
-  727|   updateCarried(_camera: THREE.Camera): void {
-  728|     if (!this.carried) return;
-  729|     const a = this.carried;
-  730|     // the Dangle spring owns the position, the swing and the flail; the Sim
-  731|     // only says where the cursor is holding it
-  732|     if (a.motion.grabPoint) a.motion.grabPoint.copy(this.carryPoint(new THREE.Vector3()));
-  733|   }
-  734| 
-  735|   // ---- floating name tags ---------------------------------------------------
-  736|   /** Hand the Sim a container; it fills and positions one tag per creature. */
-  737|   attachTags(container: HTMLElement): void {
-  738|     this.tagLayer = container;
-  739|   }
-  740| 
-  741|   private updateTags(): void {
-  742|     const layer = this.tagLayer;
-  743|     if (!layer) return;
-  744|     const cam = this.stage.camera;
-  745|     const v = new THREE.Vector3();
-  746|     const w = this.stage.renderer.domElement.clientWidth;
-  747|     const h = this.stage.renderer.domElement.clientHeight;
-  748|     let camDist = 0;
-  749|     for (const a of this.agents) {
-  750|       let el = this.tagEls.get(a.id);
+  704|     // the landing squash, the dust ring and the dizzy stars are the motion
+  705|     // layer's own landDizzy action — the Sim keeps only the mood and the
+  706|     // shake-off puff at the end
+  707|     this.hold(a, 4.4);
+  708|     this.after(2.0, () => {
+  709|       if (!a.alive) return;
+  710|       a.mood = 'neutral';
+  711|       this.vfx.puff(a.pos.x, a.pos.y + 0.4, a.pos.z, 8, { life: 0.4, size: 0.05, spread: 1.2, up: 0.9, color: '#ffffff' });
+  712|     });
+  713|     // a playful creature hops straight back for another go
+  714|     if (a.trait('playful') > 0.55) {
+  715|       this.after(2.6, () => {
+  716|         if (!a.alive) return;
+  717|         a.mood = 'happy';
+  718|         a.say('note', 1.4, 1.2);
+  719|         a.faceTarget = { x: this.stage.camera.position.x, z: this.stage.camera.position.z };
+  720|         a.goTo({ x: this.stage.camera.position.x, y: 0, z: this.stage.camera.position.z }, 0.5);
+  721|       });
+  722|     }
+  723|     this.pushEvent('drop', a);
+  724|   }
+  725| 
+  726|   /** Inspect: an eased camera fly-in, and the creature notices and waves. */
+  727|   inspect(a: Agent): void {
+  728|     this.selected = a;
+  729|     this.follow = a;
+  730|     this.inspectTarget = a;
+  731|     this.inspectT = 0;
+  732|     a.mood = 'happy';
+  733|     this.after(0.7, () => {
+  734|       if (!a.alive) return;
+  735|       a.begin('wave');
+  736|       a.say('note', 1.5, 1.2);
+  737|       a.faceTarget = { x: this.stage.camera.position.x, z: this.stage.camera.position.z };
+  738|     });
+  739|     this.after(3.0, () => { if (a.alive) { a.mood = 'neutral'; a.begin('none'); } });
+  740|     this.pushEvent('inspect', a);
+  741|   }
+  742| 
+  743|   endInspect(): void {
+  744|     this.selected = null;
+  745|     this.follow = null;
+  746|     this.inspectTarget = null;
+  747|   }
+  748| 
+  749|   updateCarried(_camera: THREE.Camera): void {
+  750|     if (!this.carried) return;

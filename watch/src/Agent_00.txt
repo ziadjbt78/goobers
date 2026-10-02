@@ -91,160 +91,160 @@
    91|   private legRest: THREE.Quaternion[] = [];
    92|   private legDelta: (THREE.Quaternion | undefined)[] = [];
    93|   private static NEXT_ID = 1;
-   94| 
-   95|   constructor(world: World, template: HeroTemplate, dna: HeroDNA, handle: HeroHandle, seed: number) {
-   96|     this.id = Agent.NEXT_ID++;
-   97|     this.world = world;
-   98|     this.dna = dna;
-   99|     this.template = template;
-  100|     this.handle = handle;
-  101|     this.rng = mulberry32(seed);
-  102|     this.name = `${template.name} ${String(this.id).padStart(2, '0')}`;
-  103|     this.bulk = template.height * dna.scale;
-  104| 
-  105|     // The animator runs in EXTERNAL-phase mode: the motion layer supplies the
-  106|     // gait cycle every frame, so there is exactly one clock.
-  107|     this.hero = new HeroAnimator(template, handle);
-  108|     const height = template.height * dna.scale;
-  109|     const rig = createRig(template, handle, this.hero, {
-  110|       emote: (g, life, punch) => this.say(g, life, punch),
-  111|       vfx: (kind, x, y, z, scale) => this.onVfx?.(kind, x, y, z, scale),
-  112|       ground: (x, z) => heightAt(x, z),
-  113|     });
-  114|     this.rig = rig;
-  115|     this.restBodyY = rig.body.position.y;
-  116|     // reach from the LIVE rig, not the template offsets
-  117|     const f0 = template.feet[0];
-  118|     const liveReach = f0
-  119|       ? handle.bones[f0.chain[1]].position.length() + handle.bones[f0.chain[2]].position.length()
-  120|       : 0;
-  121|     this.motion = new CreatureMotion(rig, locoConfigFor(template, height, liveReach), new THREE.Vector3(), 0);
-  122|     this.legRest = rig.legs.map((b) => b.quaternion.clone());
-  123| 
-  124|     for (let i = 0; i < template.feet.length; i++) {
-  125|       const f = template.feet[i];
-  126|       this.feet.push({
-  127|         pos: f.plant.clone(), from: f.plant.clone(), to: f.plant.clone(),
-  128|         swing: 0, swinging: false, phase: f.phase, step: f.step, lift: f.lift, wasUp: false,
-  129|       });
-  130|       this.prevSwing.push(false);
-  131|     }
-  132|   }
-  133| 
-  134|   /** Personality trait, 0..1. Defensive so a DNA without the field still runs. */
-  135|   trait(k: 'bold' | 'curious' | 'sociable' | 'playful' | 'lazy'): number {
-  136|     const p = (this.dna as unknown as { personality?: Record<string, number> }).personality;
-  137|     return p && typeof p[k] === 'number' ? p[k] : 0.5;
-  138|   }
-  139| 
-  140|   /** live views — the motion layer owns both vectors */
-  141|   get pos(): THREE.Vector3 { return this.motion.loco.pos; }
-  142|   get heading(): number { return this.motion.loco.heading; }
-  143|   set heading(v: number) { this.motion.loco.heading = v; }
-  144|   get speed(): number { return this.motion.loco.speed; }
-  145|   get moving(): boolean { return this.motion.loco.speed > 0.06; }
-  146|   get topSpeed(): number { return this.motion.loco.cfg.runSpeed * (0.78 + this.dna.speed * 0.34); }
-  147| 
-  148|   /** Drop the creature at a world point. */
-  149|   place(x: number, z: number, heading = this.rng() * Math.PI * 2): void {
-  150|     let px = x;
-  151|     let pz = z;
-  152|     if (!isDry(px, pz)) {
-  153|       const s = this.world.randomSpot(this.rng);
-  154|       px = s.x;
-  155|       pz = s.z;
-  156|     }
-  157|     const rr = Math.hypot(px, pz);
-  158|     if (rr > WALK_R) { px *= WALK_R / rr; pz *= WALK_R / rr; }
-  159|     const loco = this.motion.loco;
-  160|     loco.pos.set(px, heightAt(px, pz), pz);
-  161|     loco.heading = heading;
-  162|     loco.speed = 0;
-  163|     loco.phase = this.rng();
-  164|     this.motion.grabPoint = null;
-  165|     this.rig.root.position.copy(loco.pos);
-  166|     this.rig.root.rotation.set(0, heading, 0);
-  167|   }
-  168| 
-  169|   goTo(p: THREE.Vector3 | { x: number; y: number; z: number } | null, throttle = 1): void {
-  170|     this.goal = p ? new THREE.Vector3(p.x, p.y, p.z) : null;
-  171|     this.throttle = p ? throttle : 0;
-  172|   }
-  173| 
-  174|   stop(): void { this.goal = null; this.throttle = 0; this.faceTarget = null; }
+   94|   /** v17 profiler: total ms spent in the world leg solve */
+   95|   static legMs = 0;
+   96| 
+   97|   constructor(world: World, template: HeroTemplate, dna: HeroDNA, handle: HeroHandle, seed: number) {
+   98|     this.id = Agent.NEXT_ID++;
+   99|     this.world = world;
+  100|     this.dna = dna;
+  101|     this.template = template;
+  102|     this.handle = handle;
+  103|     this.rng = mulberry32(seed);
+  104|     this.name = `${template.name} ${String(this.id).padStart(2, '0')}`;
+  105|     this.bulk = template.height * dna.scale;
+  106| 
+  107|     // The animator runs in EXTERNAL-phase mode: the motion layer supplies the
+  108|     // gait cycle every frame, so there is exactly one clock.
+  109|     this.hero = new HeroAnimator(template, handle);
+  110|     const height = template.height * dna.scale;
+  111|     const rig = createRig(template, handle, this.hero, {
+  112|       emote: (g, life, punch) => this.say(g, life, punch),
+  113|       vfx: (kind, x, y, z, scale) => this.onVfx?.(kind, x, y, z, scale),
+  114|       ground: (x, z) => heightAt(x, z),
+  115|     });
+  116|     this.rig = rig;
+  117|     this.restBodyY = rig.body.position.y;
+  118|     // reach from the LIVE rig, not the template offsets
+  119|     const f0 = template.feet[0];
+  120|     const liveReach = f0
+  121|       ? handle.bones[f0.chain[1]].position.length() + handle.bones[f0.chain[2]].position.length()
+  122|       : 0;
+  123|     this.motion = new CreatureMotion(rig, locoConfigFor(template, height, liveReach), new THREE.Vector3(), 0);
+  124|     this.legRest = rig.legs.map((b) => b.quaternion.clone());
+  125| 
+  126|     for (let i = 0; i < template.feet.length; i++) {
+  127|       const f = template.feet[i];
+  128|       this.feet.push({
+  129|         pos: f.plant.clone(), from: f.plant.clone(), to: f.plant.clone(),
+  130|         swing: 0, swinging: false, phase: f.phase, step: f.step, lift: f.lift, wasUp: false,
+  131|       });
+  132|       this.prevSwing.push(false);
+  133|     }
+  134|   }
+  135| 
+  136|   /** Personality trait, 0..1. Defensive so a DNA without the field still runs. */
+  137|   trait(k: 'bold' | 'curious' | 'sociable' | 'playful' | 'lazy'): number {
+  138|     const p = (this.dna as unknown as { personality?: Record<string, number> }).personality;
+  139|     return p && typeof p[k] === 'number' ? p[k] : 0.5;
+  140|   }
+  141| 
+  142|   /** live views — the motion layer owns both vectors */
+  143|   get pos(): THREE.Vector3 { return this.motion.loco.pos; }
+  144|   get heading(): number { return this.motion.loco.heading; }
+  145|   set heading(v: number) { this.motion.loco.heading = v; }
+  146|   get speed(): number { return this.motion.loco.speed; }
+  147|   get moving(): boolean { return this.motion.loco.speed > 0.06; }
+  148|   get topSpeed(): number { return this.motion.loco.cfg.runSpeed * (0.78 + this.dna.speed * 0.34); }
+  149| 
+  150|   /** Drop the creature at a world point. */
+  151|   place(x: number, z: number, heading = this.rng() * Math.PI * 2): void {
+  152|     let px = x;
+  153|     let pz = z;
+  154|     if (!isDry(px, pz)) {
+  155|       const s = this.world.randomSpot(this.rng);
+  156|       px = s.x;
+  157|       pz = s.z;
+  158|     }
+  159|     const rr = Math.hypot(px, pz);
+  160|     if (rr > WALK_R) { px *= WALK_R / rr; pz *= WALK_R / rr; }
+  161|     const loco = this.motion.loco;
+  162|     loco.pos.set(px, heightAt(px, pz), pz);
+  163|     loco.heading = heading;
+  164|     loco.speed = 0;
+  165|     loco.phase = this.rng();
+  166|     this.motion.grabPoint = null;
+  167|     this.rig.root.position.copy(loco.pos);
+  168|     this.rig.root.rotation.set(0, heading, 0);
+  169|   }
+  170| 
+  171|   goTo(p: THREE.Vector3 | { x: number; y: number; z: number } | null, throttle = 1): void {
+  172|     this.goal = p ? new THREE.Vector3(p.x, p.y, p.z) : null;
+  173|     this.throttle = p ? throttle : 0;
+  174|   }
   175| 
-  176|   say(g: Glyph, life = 1.6, punch = 1): void {
-  177|     this.emoteGlyph = g;
-  178|     this.emoteT = life;
-  179|     this.emoteMax = life;
-  180|     this.emotePunch = punch;
-  181|   }
-  182| 
-  183|   /** Begin a choreographed action. Restarting the same action is a no-op. */
-  184|   begin(id: AnimAction): void {
-  185|     if (this.action === id) return;
-  186|     this.action = id;
-  187|     this.actionAge = 0;
-  188|     const act = ACTION_PLAY[id];
-  189|     if (act) this.motion.play(act);
-  190|     else this.motion.interrupt();
-  191|   }
-  192| 
-  193|   /** A happy hop — one celebrate cycle, restarted so three in a row read as three. */
-  194|   cheer(): void { this.motion.interrupt('celebrate'); }
-  195| 
-  196|   /** v9 `G` key: 0 none, 1 pitch+, 2 roll+, 3 left limb forward, 4 wave+. */
-  197|   debugPose = 0;
-  198| 
-  199|   /**
-  200|    * The G-key sign check. Each pose drives ONE channel through the adapter's
-  201|    * `axes` signs, so the rendered frame says whether that sign moves the way
-  202|    * its name claims. Applied on top of the real motion layer, after
-  203|    * postAnimate, so nothing else is disturbed.
-  204|    */
-  205|   private applyDebugPose(): void {
-  206|     const p = this.debugPose;
-  207|     if (!p) return;
-  208|     const ax = this.rig.axes;
-  209|     const q = new THREE.Quaternion();
-  210|     const AMP = 0.5;
-  211|     if (p === 1) {
-  212|       // rotation about the BODY bone's own pivot: the head swings relative to
-  213|       // that pivot, which is what the probe measures in the body's frame
-  214|       q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), ax.pitch * AMP);
-  215|       this.rig.body.quaternion.multiply(q);
-  216|     } else if (p === 2) {
-  217|       q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), ax.roll * AMP);
-  218|       this.rig.body.quaternion.multiply(q);
-  219|     } else if (p === 3) {
-  220|       const leg = this.rig.legs[0];
-  221|       if (leg) leg.quaternion.multiply(this.axisIn(leg, ax.limb === 'x' ? 1 : 0, ax.limb === 'z' ? 1 : 0, AMP));
-  222|     } else if (p === 4) {
-  223|       const w = this.rig.arms[0] ?? this.rig.legs[0];
-  224|       if (w) w.quaternion.multiply(this.axisIn(w, 1, 0, ax.wave * -AMP));
-  225|     }
-  226|   }
-  227| 
-  228|   /** v9 diagnostic: strip the pivot's juice so the slip it causes can be
-  229|    *  separated from slip caused by a wrong stride. */
-  230|   noPivotJuice = false;
-  231|   /** v13: body rolled over (pet-roll etc.): feet do not plant */
-  232|   rolled = false;
-  233|   /** v14: an action has lifted the body off the ground: feet hang, then re-land */
-  234|   hopping = false;
-  235|   /** v15: legs an action is kicking / flailing / waving this frame (count as airborne) */
-  236|   private kicking = new Set<number>();
-  237|   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
-  238|   overstretchFrames = 0;
-  239|   private restBodyY = 0;
-  240| 
-  241|   /**
-  242|    * Build a rotation about a WORLD axis, expressed in `bone`'s parent space, so
-  243|    * a test pose swings the limb the same way no matter how that bone's rest
-  244|    * frame happens to be oriented.
-  245|    */
-  246|   private axisIn(bone: THREE.Object3D, x: number, z: number, ang: number): THREE.Quaternion {
-  247|     const axisWorld = new THREE.Vector3(x, 0, z);
-  248|     if (axisWorld.lengthSq() < 1e-9) axisWorld.set(1, 0, 0);
-  249|     axisWorld.normalize();
-  250|     const pw = (bone.parent ?? bone).getWorldQuaternion(new THREE.Quaternion());
+  176|   stop(): void { this.goal = null; this.throttle = 0; this.faceTarget = null; }
+  177| 
+  178|   say(g: Glyph, life = 1.6, punch = 1): void {
+  179|     this.emoteGlyph = g;
+  180|     this.emoteT = life;
+  181|     this.emoteMax = life;
+  182|     this.emotePunch = punch;
+  183|   }
+  184| 
+  185|   /** Begin a choreographed action. Restarting the same action is a no-op. */
+  186|   begin(id: AnimAction): void {
+  187|     if (this.action === id) return;
+  188|     this.action = id;
+  189|     this.actionAge = 0;
+  190|     const act = ACTION_PLAY[id];
+  191|     if (act) this.motion.play(act);
+  192|     else this.motion.interrupt();
+  193|   }
+  194| 
+  195|   /** A happy hop — one celebrate cycle, restarted so three in a row read as three. */
+  196|   cheer(): void { this.motion.interrupt('celebrate'); }
+  197| 
+  198|   /** v9 `G` key: 0 none, 1 pitch+, 2 roll+, 3 left limb forward, 4 wave+. */
+  199|   debugPose = 0;
+  200| 
+  201|   /**
+  202|    * The G-key sign check. Each pose drives ONE channel through the adapter's
+  203|    * `axes` signs, so the rendered frame says whether that sign moves the way
+  204|    * its name claims. Applied on top of the real motion layer, after
+  205|    * postAnimate, so nothing else is disturbed.
+  206|    */
+  207|   private applyDebugPose(): void {
+  208|     const p = this.debugPose;
+  209|     if (!p) return;
+  210|     const ax = this.rig.axes;
+  211|     const q = new THREE.Quaternion();
+  212|     const AMP = 0.5;
+  213|     if (p === 1) {
+  214|       // rotation about the BODY bone's own pivot: the head swings relative to
+  215|       // that pivot, which is what the probe measures in the body's frame
+  216|       q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), ax.pitch * AMP);
+  217|       this.rig.body.quaternion.multiply(q);
+  218|     } else if (p === 2) {
+  219|       q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), ax.roll * AMP);
+  220|       this.rig.body.quaternion.multiply(q);
+  221|     } else if (p === 3) {
+  222|       const leg = this.rig.legs[0];
+  223|       if (leg) leg.quaternion.multiply(this.axisIn(leg, ax.limb === 'x' ? 1 : 0, ax.limb === 'z' ? 1 : 0, AMP));
+  224|     } else if (p === 4) {
+  225|       const w = this.rig.arms[0] ?? this.rig.legs[0];
+  226|       if (w) w.quaternion.multiply(this.axisIn(w, 1, 0, ax.wave * -AMP));
+  227|     }
+  228|   }
+  229| 
+  230|   /** v9 diagnostic: strip the pivot's juice so the slip it causes can be
+  231|    *  separated from slip caused by a wrong stride. */
+  232|   noPivotJuice = false;
+  233|   /** v13: body rolled over (pet-roll etc.): feet do not plant */
+  234|   rolled = false;
+  235|   /** v14: an action has lifted the body off the ground: feet hang, then re-land */
+  236|   hopping = false;
+  237|   /** v15: legs an action is kicking / flailing / waving this frame (count as airborne) */
+  238|   private kicking = new Set<number>();
+  239|   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
+  240|   overstretchFrames = 0;
+  241|   private restBodyY = 0;
+  242| 
+  243|   /**
+  244|    * Build a rotation about a WORLD axis, expressed in `bone`'s parent space, so
+  245|    * a test pose swings the limb the same way no matter how that bone's rest
+  246|    * frame happens to be oriented.
+  247|    */
+  248|   private axisIn(bone: THREE.Object3D, x: number, z: number, ang: number): THREE.Quaternion {
+  249|     const axisWorld = new THREE.Vector3(x, 0, z);
+  250|     if (axisWorld.lengthSq() < 1e-9) axisWorld.set(1, 0, 0);

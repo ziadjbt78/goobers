@@ -1,250 +1,250 @@
-  251| 
-  252|     this.carriedAgent = !!this.carried;
-  253|     this.updateEmotes();
-  254|     stats.creatures = this.agents.length;
-  255| 
-  256|     // ---- grass is trampled flat around every creature's feet ---------------
-  257|     this.trampleTimer -= dt;
-  258|     if (this.trampleTimer <= 0) {
-  259|       this.trampleTimer = 0.22;
-  260|       this.world.props.trample(this.agents.map((a) => ({ x: a.pos.x, z: a.pos.z })));
-  261|     }
-  262| 
-  263|     for (const a of this.agents) {
-  264|       const r = Math.hypot(a.pos.x, a.pos.z);
-  265|       if (r > WALK_R) { a.pos.x *= WALK_R / r; a.pos.z *= WALK_R / r; }
-  266|     }
-  267|   }
+  251|           const want = ANIM_ACTION[b.action] ?? 'none';
+  252|           if (a.action !== want && a.action !== 'petRoll' && a.action !== 'chomp' && a.action !== 'wave') a.begin(want);
+  253|         }
+  254|       }
+  255|       const ta = performance.now();
+  256|       a.update(dt);
+  257|       this.prof.agent += performance.now() - ta;
+  258|     }
+  259| 
+  260|     // ---- petting: the motion layer owns the pose, its roll-over at 2 s and
+  261|     //      the heart beat; the Sim only decides how long it lasts -------------
+  262|     if (this.petting) {
+  263|       const p = this.petting;
+  264|       this.petHold += dt;
+  265|       p.mood = this.petHold > 2 ? 'love' : 'happy';
+  266|       p.wiggle = 1;
+  267|     }
   268| 
-  269|   private runChoreo(dt: number): void {
-  270|     if (!this.choreo.length) return;
-  271|     for (let i = this.choreo.length - 1; i >= 0; i--) {
-  272|       const c = this.choreo[i];
-  273|       c.t += dt;
-  274|       if (c.t >= c.at) { c.fn(); this.choreo.splice(i, 1); }
-  275|     }
-  276|   }
-  277| 
-  278|   /** Schedule a step `at` seconds from now. All tool reactions are built here. */
-  279|   private after(at: number, fn: () => void): void {
-  280|     this.choreo.push({ at, t: 0, fn });
-  281|   }
-  282| 
-  283|   private hold(a: Agent, seconds: number): void {
-  284|     this.overrides.set(a.id, Math.max(this.overrides.get(a.id) ?? 0, seconds));
-  285|   }
-  286| 
-  287|   private tickDrops(dt: number): void {
-  288|     for (let i = this.drops.length - 1; i >= 0; i--) {
-  289|       const d = this.drops[i];
-  290|       d.life -= dt;
-  291|       d.vel.y -= 11 * dt;
-  292|       d.mesh.position.addScaledVector(d.vel, dt);
-  293|       const g = heightAt(d.mesh.position.x, d.mesh.position.z) + 0.085;
-  294|       if (d.mesh.position.y < g) {
-  295|         d.mesh.position.y = g;
-  296|         if (d.vel.y < -0.4) {
-  297|           d.vel.y = -d.vel.y * 0.42;
-  298|           d.vel.x *= 0.6; d.vel.z *= 0.6;
-  299|           this.vfx.ring(d.mesh.position.x, g, d.mesh.position.z, { r0: 0.06, r1: 0.5, life: 0.35, color: '#ffd0d8' });
-  300|         } else { d.vel.set(0, 0, 0); }
-  301|       }
-  302|       if (d.life <= 0) {
-  303|         this.stage.scene.remove(d.mesh);
-  304|         this.drops.splice(i, 1);
-  305|       }
-  306|     }
-  307|   }
-  308| 
-  309|   private updateEmotes(): void {
-  310|     const list: { glyph: Glyph; pos: THREE.Vector3; life: number; punch: number }[] = [];
-  311|     for (const a of this.agents) {
-  312|       if (a.emoteGlyph && a.emoteT > 0) {
-  313|         a.emoteAnchor(this.tmp);
-  314|         list.push({
-  315|           glyph: a.emoteGlyph, pos: this.tmp.clone(),
-  316|           life: 1 - Math.min(1, a.emoteT / Math.max(0.1, a.emoteMax)),
-  317|           punch: a.emotePunch,
-  318|         });
-  319|       }
-  320|     }
-  321|     this.emotes.render(list, this.stage.camera);
-  322|   }
-  323| 
-  324|   private pushEvent(kind: string, a: Agent): void {
-  325|     this.events.push({ t: +this.simTime.toFixed(2), kind, name: a.name });
-  326|     if (this.events.length > 400) this.events.shift();
-  327|   }
-  328| 
-  329|   drainBrainEvents(): void {
-  330|     for (const a of this.agents) {
-  331|       const b = this.brains.get(a.id);
-  332|       if (!b) continue;
-  333|       while (b.events.length) {
-  334|         const e = b.events.shift();
-  335|         if (e) this.events.push({ t: +this.simTime.toFixed(2), kind: e.kind, name: e.name });
+  269|     this.carriedAgent = !!this.carried;
+  270|     this.updateEmotes();
+  271|     stats.creatures = this.agents.length;
+  272| 
+  273|     // ---- grass is trampled flat around every creature's feet ---------------
+  274|     this.trampleTimer -= dt;
+  275|     if (this.trampleTimer <= 0) {
+  276|       this.trampleTimer = 0.22;
+  277|       this.world.props.trample(this.agents.map((a) => ({ x: a.pos.x, z: a.pos.z })));
+  278|     }
+  279| 
+  280|     for (const a of this.agents) {
+  281|       const r = Math.hypot(a.pos.x, a.pos.z);
+  282|       if (r > WALK_R) { a.pos.x *= WALK_R / r; a.pos.z *= WALK_R / r; }
+  283|     }
+  284|   }
+  285| 
+  286|   private runChoreo(dt: number): void {
+  287|     if (!this.choreo.length) return;
+  288|     for (let i = this.choreo.length - 1; i >= 0; i--) {
+  289|       const c = this.choreo[i];
+  290|       c.t += dt;
+  291|       if (c.t >= c.at) { c.fn(); this.choreo.splice(i, 1); }
+  292|     }
+  293|   }
+  294| 
+  295|   /** Schedule a step `at` seconds from now. All tool reactions are built here. */
+  296|   private after(at: number, fn: () => void): void {
+  297|     this.choreo.push({ at, t: 0, fn });
+  298|   }
+  299| 
+  300|   private hold(a: Agent, seconds: number): void {
+  301|     this.overrides.set(a.id, Math.max(this.overrides.get(a.id) ?? 0, seconds));
+  302|   }
+  303| 
+  304|   private tickDrops(dt: number): void {
+  305|     for (let i = this.drops.length - 1; i >= 0; i--) {
+  306|       const d = this.drops[i];
+  307|       d.life -= dt;
+  308|       d.vel.y -= 11 * dt;
+  309|       d.mesh.position.addScaledVector(d.vel, dt);
+  310|       const g = heightAt(d.mesh.position.x, d.mesh.position.z) + 0.085;
+  311|       if (d.mesh.position.y < g) {
+  312|         d.mesh.position.y = g;
+  313|         if (d.vel.y < -0.4) {
+  314|           d.vel.y = -d.vel.y * 0.42;
+  315|           d.vel.x *= 0.6; d.vel.z *= 0.6;
+  316|           this.vfx.ring(d.mesh.position.x, g, d.mesh.position.z, { r0: 0.06, r1: 0.5, life: 0.35, color: '#ffd0d8' });
+  317|         } else { d.vel.set(0, 0, 0); }
+  318|       }
+  319|       if (d.life <= 0) {
+  320|         this.stage.scene.remove(d.mesh);
+  321|         this.drops.splice(i, 1);
+  322|       }
+  323|     }
+  324|   }
+  325| 
+  326|   private updateEmotes(): void {
+  327|     const list: { glyph: Glyph; pos: THREE.Vector3; life: number; punch: number }[] = [];
+  328|     for (const a of this.agents) {
+  329|       if (a.emoteGlyph && a.emoteT > 0) {
+  330|         a.emoteAnchor(this.tmp);
+  331|         list.push({
+  332|           glyph: a.emoteGlyph, pos: this.tmp.clone(),
+  333|           life: 1 - Math.min(1, a.emoteT / Math.max(0.1, a.emoteMax)),
+  334|           punch: a.emotePunch,
+  335|         });
   336|       }
   337|     }
-  338|   }
-  339| 
-  340|   // ---- creature lifecycle --------------------------------------------------
-  341|   spawn(hero: HeroId, at: THREE.Vector3 | null, quiet = false, dnaIn?: HeroDNA, seedIn?: number): Agent {
-  342|     const dna: HeroDNA = dnaIn ?? randomDNA(this.rng, hero);
-  343|     const pal = paletteAt(dna.palette);
-  344|     const colors = {
-  345|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
-  346|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
-  347|     };
-  348|     const template = applyDNA(buildHeroTemplate(hero, colors), dna);
-  349|     const handle = buildHero(template, pal);
-  350|     const agentSeed = seedIn ?? (this.seed + this.agents.length * 7919 + Math.floor(this.rng() * 1e6));
-  351|     const agent = new Agent(this.world, template, dna, handle, agentSeed);
-  352|     this.heroOf.set(agent.id, hero);
-  353|     this.seedOf.set(agent.id, agentSeed);
-  354|     const p = at ?? this.world.randomSpot(this.rng);
-  355|     agent.place(p.x, p.z);
-  356|     agent.onFootfall = (x, y, z, power) => this.vfx.dust(x, y, z, power);
-  357|     agent.onVfx = (kind, x, y, z, scale) => this.motionVfx(kind, x, y, z, scale);
-  358|     this.stage.scene.add(handle.group);
-  359|     this.agents.push(agent);
-  360|     this.world.agents.push(agent);
-  361|     this.brains.set(agent.id, new Brain(agent.id * 2654435761));
-  362|     if (!quiet) {
-  363|       this.pushEvent('spawn', agent);
-  364|       this.spawnTheatre(agent);
-  365|     }
-  366|     return agent;
-  367|   }
-  368| 
-  369|   /**
-  370|    * Spawn theatre: a glowing seed drops, wobbles, pops with a flash, then the
-  371|    * creature stretches tall, blinks twice, looks around and does a happy hop.
-  372|    */
-  373|   private spawnTheatre(a: Agent): void {
-  374|     const x = a.pos.x;
-  375|     const z = a.pos.z;
-  376|     const y = a.pos.y;
-  377|     a.motion.face.set('asleep');
-  378|     a.mood = 'surprised';
-  379|     this.hold(a, 3.2);
-  380|     a.say('bang', 0.9, 1.4);
-  381|     this.vfx.ring(x, y, z, { r0: 0.2, r1: 3.4, life: 0.9, color: '#bff7ff' });
-  382|     this.vfx.puff(x, y + 0.25, z, 18, { life: 0.8, size: 0.09, spread: 1.3, up: 1.6, color: '#d9f7ff' });
-  383|     this.after(0.55, () => {
-  384|       this.vfx.ring(x, y, z, { r0: 0.1, r1: 2.2, life: 0.6, color: '#fff3b0' });
-  385|       this.vfx.puff(x, y + 0.15, z, 22, { life: 0.55, size: 0.075, spread: 1.6, up: 1.1, color: '#fff0b8' });
-  386|       a.mood = 'happy';
-  387|       a.cheer();
-  388|       a.motion.face.set('curious');
-  389|     });
-  390|     this.after(1.1, () => { a.motion.face.set('asleep'); });
-  391|     this.after(1.3, () => { a.motion.face.set('curious'); });
-  392|     this.after(1.5, () => { a.motion.face.set('asleep'); });
-  393|     this.after(1.7, () => { a.motion.face.set('curious'); });
-  394|     this.after(2.1, () => { a.say('note', 1.2, 1.2); a.cheer(); });
-  395|     this.after(2.6, () => { a.mood = 'neutral'; a.motion.face.set('neutral'); });
-  396|   }
-  397| 
-  398|   remove(a: Agent): void {
-  399|     a.alive = false;
-  400|     this.stage.scene.remove(a.handle.group);
-  401|     a.handle.dispose();
-  402|     const i = this.agents.indexOf(a);
-  403|     if (i >= 0) this.agents.splice(i, 1);
-  404|     const j = this.world.agents.indexOf(a);
-  405|     if (j >= 0) this.world.agents.splice(j, 1);
-  406|     this.brains.delete(a.id);
-  407|     this.heroOf.delete(a.id);
-  408|     this.seedOf.delete(a.id);
-  409|     this.brainAcc.delete(a.id);
-  410|     if (this.selected === a) this.selected = null;
-  411|     if (this.follow === a) this.follow = null;
-  412|     if (this.carried === a) this.carried = null;
-  413|     if (this.petting === a) this.petting = null;
-  414|   }
-  415| 
-  416|   // ---- player tools --------------------------------------------------------
-  417|   /**
-  418|    * Call. A ripple spreads on the ground and every creature nearby reacts
-  419|    * exactly the way its personality says it should: bold ones sprint, shy ones
-  420|    * peek first and creep in, lazy ones wave a limb and stay put.
-  421|    */
-  422|   call(pos: THREE.Vector3, radius = 10): number {
-  423|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.3, r1: radius * 0.75, life: 1.1, color: '#9fe8ff' });
-  424|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.2, r1: radius * 0.5, life: 0.8, color: '#ffffff' });
-  425|     this.vfx.puff(pos.x, pos.y + 0.1, pos.z, 10, { life: 0.7, size: 0.08, spread: 1.6, up: 1.0, color: '#cfeeff' });
-  426|     let n = 0;
-  427|     for (const a of this.agents) {
-  428|       const d = a.pos.distanceTo(pos);
-  429|       if (d >= radius) continue;
-  430|       n++;
-  431|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
-  432|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 1.0, 0, pos.z - Math.cos(ang) * 1.0);
-  433|       spot.y = heightAt(spot.x, spot.z);
-  434|       // the ears/antennae twitch and the head snaps to the sound first
-  435|       a.faceTarget = { x: pos.x, z: pos.z };
-  436|       a.say('bang', 1.1, 1.3);
-  437|       a.mood = 'surprised';
-  438|       this.hold(a, 3.6);
-  439| 
-  440|       const bold = a.trait('bold');
-  441|       const lazy = a.trait('lazy');
-  442|       const shy = 1 - a.trait('sociable');
-  443|       if (lazy > 0.62 && bold < 0.55) {
-  444|         // lazy: waves a limb, does not budge
-  445|         this.after(0.5, () => { if (a.alive) {         a.begin('wave');
-  446|         a.say('note', 1.6, 1.2);
-  447|       } });
-  448|     this.pushEvent('call_wave', a);
-  449|         this.after(2.2, () => { if (a.alive) a.mood = 'neutral'; });
-  450|         this.pushEvent('call_ignore', a);
-  451|         continue;
-  452|       }
-  453|       if (shy > 0.58 && bold < 0.62) {
-  454|         // shy: peek, wait, then creep over at a low throttle
-  455|         this.after(1.5, () => {
-  456|           if (!a.alive) return;
-  457|           a.goTo(spot, 0.45);
-  458|           a.mood = 'neutral';
-  459|         });
-  460|         this.pushEvent('call_peek', a);
-  461|         continue;
-  462|       }
-  463|       // bold: straight there at full tilt, bouncing
-  464|       this.after(0.25, () => {
-  465|         if (!a.alive) return;
-  466|         a.goTo(spot, 1);
-  467|         a.mood = 'happy';
-  468|         a.cheer();
-  469|       });
-  470|       this.pushEvent('call', a);
-  471|     }
-  472|     return n;
-  473|   }
-  474| 
-  475|   /**
-  476|    * Feed. The berry drops and bounces, the nearest hungry creature races over,
-  477|    * sniffs, chomps three times with puffed cheeks, then squints and wiggles to
-  478|    * a ♪. Late arrivals pull a sad face and a "?".
-  479|    */
-  480|   dropBerry(pos: THREE.Vector3): void {
-  481|     const mesh = new THREE.Mesh(this.berryGeo, MAT.lit);
-  482|     mesh.name = 'droppedBerry';
-  483|     mesh.position.set(pos.x, heightAt(pos.x, pos.z) + 1.6, pos.z);
-  484|     const rng = this.rng;
-  485|     mesh.userData.vx = (rng() - 0.5) * 0.6;
-  486|     this.stage.scene.add(mesh);
-  487|     this.drops.push({
-  488|       mesh,
-  489|       vel: new THREE.Vector3((rng() - 0.5) * 0.7, 0, (rng() - 0.5) * 0.7),
-  490|       life: 26,
-  491|     });
-  492|     this.vfx.ring(pos.x, heightAt(pos.x, pos.z), pos.z, { r0: 0.1, r1: 1.0, life: 0.5, color: '#ffc6d2' });
-  493| 
-  494|     const sorted = [...this.agents]
-  495|       .sort((a, b) => a.pos.distanceTo(pos) - b.pos.distanceTo(pos))
-  496|       .slice(0, 4);
-  497|     if (!sorted.length) return;
-  498| 
-  499|     const winner = sorted[0];
-  500|     sorted.forEach((a, i) => {
+  338|     this.emotes.render(list, this.stage.camera);
+  339|   }
+  340| 
+  341|   private pushEvent(kind: string, a: Agent): void {
+  342|     this.events.push({ t: +this.simTime.toFixed(2), kind, name: a.name });
+  343|     if (a && a.pos) this.sfx.event(kind, a.mood, a.bulk, this.camDist(a.pos.x, a.pos.y, a.pos.z), a.id);
+  344|     else this.sfx.event(kind, 'neutral', 1, 0, 0);
+  345|     if (this.events.length > 400) this.events.shift();
+  346|   }
+  347| 
+  348|   drainBrainEvents(): void {
+  349|     for (const a of this.agents) {
+  350|       const b = this.brains.get(a.id);
+  351|       if (!b) continue;
+  352|       while (b.events.length) {
+  353|         const e = b.events.shift();
+  354|         if (e) {
+  355|           this.events.push({ t: +this.simTime.toFixed(2), kind: e.kind, name: e.name });
+  356|           this.sfx.voice(a.mood, a.bulk, this.camDist(a.pos.x, a.pos.y, a.pos.z), a.id);
+  357|         }
+  358|       }
+  359|     }
+  360|   }
+  361| 
+  362|   // ---- creature lifecycle --------------------------------------------------
+  363|   spawn(hero: HeroId, at: THREE.Vector3 | null, quiet = false, dnaIn?: HeroDNA, seedIn?: number): Agent {
+  364|     const dna: HeroDNA = dnaIn ?? randomDNA(this.rng, hero);
+  365|     const pal = paletteAt(dna.palette);
+  366|     const colors = {
+  367|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
+  368|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
+  369|     };
+  370|     const template = applyDNA(buildHeroTemplate(hero, colors), dna);
+  371|     const handle = buildHero(template, pal);
+  372|     const agentSeed = seedIn ?? (this.seed + this.agents.length * 7919 + Math.floor(this.rng() * 1e6));
+  373|     const agent = new Agent(this.world, template, dna, handle, agentSeed);
+  374|     this.heroOf.set(agent.id, hero);
+  375|     this.seedOf.set(agent.id, agentSeed);
+  376|     const p = at ?? this.world.randomSpot(this.rng);
+  377|     agent.place(p.x, p.z);
+  378|     agent.onFootfall = (x, y, z, power) => { this.vfx.dust(x, y, z, power); this.sfx.footstep(power, agent.bulk, this.camDist(x, y, z)); };
+  379|     agent.onVfx = (kind, x, y, z, scale) => this.motionVfx(kind, x, y, z, scale);
+  380|     this.stage.scene.add(handle.group);
+  381|     this.agents.push(agent);
+  382|     this.world.agents.push(agent);
+  383|     this.brains.set(agent.id, new Brain(agent.id * 2654435761));
+  384|     if (!quiet) {
+  385|       this.pushEvent('spawn', agent);
+  386|       this.spawnTheatre(agent);
+  387|     }
+  388|     return agent;
+  389|   }
+  390| 
+  391|   /**
+  392|    * Spawn theatre: a glowing seed drops, wobbles, pops with a flash, then the
+  393|    * creature stretches tall, blinks twice, looks around and does a happy hop.
+  394|    */
+  395|   private spawnTheatre(a: Agent): void {
+  396|     const x = a.pos.x;
+  397|     const z = a.pos.z;
+  398|     const y = a.pos.y;
+  399|     a.motion.face.set('asleep');
+  400|     a.mood = 'surprised';
+  401|     this.hold(a, 3.2);
+  402|     a.say('bang', 0.9, 1.4);
+  403|     this.vfx.ring(x, y, z, { r0: 0.2, r1: 3.4, life: 0.9, color: '#bff7ff' });
+  404|     this.vfx.puff(x, y + 0.25, z, 18, { life: 0.8, size: 0.09, spread: 1.3, up: 1.6, color: '#d9f7ff' });
+  405|     this.after(0.55, () => {
+  406|       this.vfx.ring(x, y, z, { r0: 0.1, r1: 2.2, life: 0.6, color: '#fff3b0' });
+  407|       this.vfx.puff(x, y + 0.15, z, 22, { life: 0.55, size: 0.075, spread: 1.6, up: 1.1, color: '#fff0b8' });
+  408|       a.mood = 'happy';
+  409|       a.cheer();
+  410|       a.motion.face.set('curious');
+  411|     });
+  412|     this.after(1.1, () => { a.motion.face.set('asleep'); });
+  413|     this.after(1.3, () => { a.motion.face.set('curious'); });
+  414|     this.after(1.5, () => { a.motion.face.set('asleep'); });
+  415|     this.after(1.7, () => { a.motion.face.set('curious'); });
+  416|     this.after(2.1, () => { a.say('note', 1.2, 1.2); a.cheer(); });
+  417|     this.after(2.6, () => { a.mood = 'neutral'; a.motion.face.set('neutral'); });
+  418|   }
+  419| 
+  420|   remove(a: Agent): void {
+  421|     a.alive = false;
+  422|     this.stage.scene.remove(a.handle.group);
+  423|     a.handle.dispose();
+  424|     const i = this.agents.indexOf(a);
+  425|     if (i >= 0) this.agents.splice(i, 1);
+  426|     const j = this.world.agents.indexOf(a);
+  427|     if (j >= 0) this.world.agents.splice(j, 1);
+  428|     this.brains.delete(a.id);
+  429|     this.heroOf.delete(a.id);
+  430|     this.seedOf.delete(a.id);
+  431|     this.brainAcc.delete(a.id);
+  432|     if (this.selected === a) this.selected = null;
+  433|     if (this.follow === a) this.follow = null;
+  434|     if (this.carried === a) this.carried = null;
+  435|     if (this.petting === a) this.petting = null;
+  436|   }
+  437| 
+  438|   // ---- player tools --------------------------------------------------------
+  439|   /**
+  440|    * Call. A ripple spreads on the ground and every creature nearby reacts
+  441|    * exactly the way its personality says it should: bold ones sprint, shy ones
+  442|    * peek first and creep in, lazy ones wave a limb and stay put.
+  443|    */
+  444|   call(pos: THREE.Vector3, radius = 10): number {
+  445|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.3, r1: radius * 0.75, life: 1.1, color: '#9fe8ff' });
+  446|     this.vfx.ring(pos.x, pos.y, pos.z, { r0: 0.2, r1: radius * 0.5, life: 0.8, color: '#ffffff' });
+  447|     this.vfx.puff(pos.x, pos.y + 0.1, pos.z, 10, { life: 0.7, size: 0.08, spread: 1.6, up: 1.0, color: '#cfeeff' });
+  448|     let n = 0;
+  449|     for (const a of this.agents) {
+  450|       const d = a.pos.distanceTo(pos);
+  451|       if (d >= radius) continue;
+  452|       n++;
+  453|       const ang = Math.atan2(pos.x - a.pos.x, pos.z - a.pos.z);
+  454|       const spot = new THREE.Vector3(pos.x - Math.sin(ang) * 1.0, 0, pos.z - Math.cos(ang) * 1.0);
+  455|       spot.y = heightAt(spot.x, spot.z);
+  456|       // the ears/antennae twitch and the head snaps to the sound first
+  457|       a.faceTarget = { x: pos.x, z: pos.z };
+  458|       a.say('bang', 1.1, 1.3);
+  459|       a.mood = 'surprised';
+  460|       this.hold(a, 3.6);
+  461| 
+  462|       const bold = a.trait('bold');
+  463|       const lazy = a.trait('lazy');
+  464|       const shy = 1 - a.trait('sociable');
+  465|       if (lazy > 0.62 && bold < 0.55) {
+  466|         // lazy: waves a limb, does not budge
+  467|         this.after(0.5, () => { if (a.alive) {         a.begin('wave');
+  468|         a.say('note', 1.6, 1.2);
+  469|       } });
+  470|     this.pushEvent('call_wave', a);
+  471|         this.after(2.2, () => { if (a.alive) a.mood = 'neutral'; });
+  472|         this.pushEvent('call_ignore', a);
+  473|         continue;
+  474|       }
+  475|       if (shy > 0.58 && bold < 0.62) {
+  476|         // shy: peek, wait, then creep over at a low throttle
+  477|         this.after(1.5, () => {
+  478|           if (!a.alive) return;
+  479|           a.goTo(spot, 0.45);
+  480|           a.mood = 'neutral';
+  481|         });
+  482|         this.pushEvent('call_peek', a);
+  483|         continue;
+  484|       }
+  485|       // bold: straight there at full tilt, bouncing
+  486|       this.after(0.25, () => {
+  487|         if (!a.alive) return;
+  488|         a.goTo(spot, 1);
+  489|         a.mood = 'happy';
+  490|         a.cheer();
+  491|       });
+  492|       this.pushEvent('call', a);
+  493|     }
+  494|     return n;
+  495|   }
+  496| 
+  497|   /**
+  498|    * Feed. The berry drops and bounces, the nearest hungry creature races over,
+  499|    * sniffs, chomps three times with puffed cheeks, then squints and wiggles to
+  500|    * a ♪. Late arrivals pull a sad face and a "?".

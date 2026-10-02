@@ -1,31 +1,53 @@
- 1251|     aB.setClock(12);
- 1252|     hA.group.position.set(0, 0, 0);
- 1253|     hB.group.position.set(0, 0, 0);
- 1254|     for (let i = 0; i < aB.drive.footTargets.length; i++) {
- 1255|       aB.drive.footTargets[i].copy(tpl.feet[i]?.plant ?? new THREE.Vector3());
- 1256|     }
- 1257| 
- 1258|     let maxQuat = 0;
- 1259|     let maxPos = 0;
- 1260|     for (let f = 0; f < frames; f++) {
- 1261|       aA.update(dt, null);
- 1262|       aB.update(dt, null);
- 1263|       hA.group.updateMatrixWorld(true);
- 1264|       hB.group.updateMatrixWorld(true);
- 1265|       if (f < 30) continue;
- 1266|       for (let i = 0; i < hA.bones.length; i++) {
- 1267|         const qa = hA.bones[i].quaternion;
- 1268|         const qb = hB.bones[i].quaternion;
- 1269|         const d = 1 - Math.abs(qa.dot(qb));
- 1270|         if (d > maxQuat) maxQuat = d;
- 1271|         const pa = new THREE.Vector3().setFromMatrixPosition(hA.bones[i].matrixWorld);
- 1272|         const pb = new THREE.Vector3().setFromMatrixPosition(hB.bones[i].matrixWorld);
- 1273|         const pd = pa.distanceTo(pb);
- 1274|         if (pd > maxPos) maxPos = pd;
- 1275|       }
- 1276|     }
- 1277|     hA.dispose();
- 1278|     hB.dispose();
- 1279|     return { maxQuat, maxPos, bones: hA.bones.length, seconds: Math.round(frames * dt * 100) / 100 };
- 1280|   }
- 1281| }
+ 1251|       this.stage.controls.target.lerp(new THREE.Vector3(t.pos.x, t.pos.y + 0.45, t.pos.z), e * 0.20);
+ 1252|     }
+ 1253|   }
+ 1254| 
+ 1255|   private tickTagTimer = 0;
+ 1256| 
+ 1257|   poseIdentity(frames = 180, dt = 1 / 60): { maxQuat: number; maxPos: number; bones: number; seconds: number } {
+ 1258|     const pal = paletteAt(0);
+ 1259|     const colors = {
+ 1260|       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
+ 1261|       accent: hexToLinear(pal.accent), deep: hexToLinear(pal.deep),
+ 1262|     };
+ 1263|     const tpl = buildHeroTemplate(HERO_IDS[0], colors);
+ 1264|     const hA = buildHero(tpl, pal);
+ 1265|     const hB = buildHero(tpl, pal);
+ 1266|     const aA = new HeroAnimator(tpl, hA);
+ 1267|     const aB = new HeroAnimator(tpl, hB);
+ 1268|     aA.deterministic = true;
+ 1269|     aB.deterministic = true;
+ 1270|     aA.setGait(0);
+ 1271|     aB.beginDrive();
+ 1272|     aA.setClock(12);
+ 1273|     aB.setClock(12);
+ 1274|     hA.group.position.set(0, 0, 0);
+ 1275|     hB.group.position.set(0, 0, 0);
+ 1276|     for (let i = 0; i < aB.drive.footTargets.length; i++) {
+ 1277|       aB.drive.footTargets[i].copy(tpl.feet[i]?.plant ?? new THREE.Vector3());
+ 1278|     }
+ 1279| 
+ 1280|     let maxQuat = 0;
+ 1281|     let maxPos = 0;
+ 1282|     for (let f = 0; f < frames; f++) {
+ 1283|       aA.update(dt, null);
+ 1284|       aB.update(dt, null);
+ 1285|       hA.group.updateMatrixWorld(true);
+ 1286|       hB.group.updateMatrixWorld(true);
+ 1287|       if (f < 30) continue;
+ 1288|       for (let i = 0; i < hA.bones.length; i++) {
+ 1289|         const qa = hA.bones[i].quaternion;
+ 1290|         const qb = hB.bones[i].quaternion;
+ 1291|         const d = 1 - Math.abs(qa.dot(qb));
+ 1292|         if (d > maxQuat) maxQuat = d;
+ 1293|         const pa = new THREE.Vector3().setFromMatrixPosition(hA.bones[i].matrixWorld);
+ 1294|         const pb = new THREE.Vector3().setFromMatrixPosition(hB.bones[i].matrixWorld);
+ 1295|         const pd = pa.distanceTo(pb);
+ 1296|         if (pd > maxPos) maxPos = pd;
+ 1297|       }
+ 1298|     }
+ 1299|     hA.dispose();
+ 1300|     hB.dispose();
+ 1301|     return { maxQuat, maxPos, bones: hA.bones.length, seconds: Math.round(frames * dt * 100) / 100 };
+ 1302|   }
+ 1303| }

@@ -29,222 +29,222 @@
    29| import { buildTerrain, buildSea, buildFoam, heightAt, isDry, WALK_R } from './terrain';
    30| import { readSave, writeSave, clearSave, type SaveFile } from './save';
    31| import { BUILD_LABEL } from '../core/build';
-   32| 
-   33| export type Tool = 'none' | 'spawn' | 'call' | 'feed' | 'ball' | 'pet' | 'carry' | 'inspect';
-   34| 
-   35| /** brain action -> the additive pose the one animator plays. */
-   36| const ANIM_ACTION: Record<string, AnimAction> = {
-   37|   wander: 'none', investigate: 'sniff', drink: 'sniff', hide: 'none', idle: 'none',
-   38|   eat: 'eat', nap: 'sleep', greet: 'greet', playChase: 'play', follow: 'none',
-   39|   flee: 'startle', pushBall: 'play',
-   40| };
-   41| 
-   42| export interface SimEvent { t: number; kind: string; name: string }
-   43| export interface ToolTarget { agent: Agent | null; ground: THREE.Vector3 | null }
-   44| 
-   45| interface Choreo { at: number; t: number; fn: () => void }
-   46| interface DroppedBerry { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }
-   47| 
-   48| export class Sim {
-   49|   readonly stage: Stage;
-   50|   readonly world: World;
-   51|   readonly emotes: Emotes;
-   52|   readonly vfx: Vfx;
-   53|   readonly agents: Agent[] = [];
-   54|   readonly brains = new Map<number, Brain>();
-   55|   readonly events: SimEvent[] = [];
-   56|   tool: Tool = 'none';
-   57|   spawnSpecies: HeroId | null = null;
-   58|   selected: Agent | null = null;
-   59|   follow: Agent | null = null;
-   60|   carried: Agent | null = null;
-   61|   petting: Agent | null = null;
-   62|   simTime = 0;
-   63|   brainEnabled = true;
-   64|   /** inspection camera: eased fly-in, released with Esc */
-   65|   inspectT = 0;
-   66|   private inspectTarget: Agent | null = null;
-   67|   private rng: () => number;
-   68|   private loop: Loop;
-   69|   private seed: number;
-   70|   private lastTickMs = 0;
-   71|   private carriedAgent = false;
-   72|   private tmp = new THREE.Vector3();
-   73|   private choreo: Choreo[] = [];
-   74|   private drops: DroppedBerry[] = [];
-   75|   private berryGeo!: THREE.SphereGeometry;
-   76|   private carryVel = new THREE.Vector3();
-   77|   private petHold = 0;
-   78|   private overrides = new Map<number, number>();
-   79|   private tagLayer: HTMLElement | null = null;
-   80|   private tagEls = new Map<number, HTMLDivElement>();
-   81|   private trampleTimer = 0;
-   82|   /** v16: species + name seed per creature, for save/load */
-   83|   private heroOf = new Map<number, HeroId>();
-   84|   private seedOf = new Map<number, number>();
-   85|   /** v16 brain LOD accumulators */
-   86|   private brainAcc = new Map<number, number>();
-   87|   private lodTick = 0;
-   88|   private saveTimer = 0;
-   89| 
-   90|   constructor(canvas: HTMLCanvasElement, seed = 20261001) {
-   91|     buildMaterials();
-   92|     this.emotes = new Emotes();
-   93|     this.stage = new Stage(canvas);
-   94|     this.vfx = new Vfx();
-   95|     this.rng = mulberry32(seed);
-   96|     this.seed = seed;
-   97|     this.world = new World(this.stage);
-   98|     this.stage.scene.add(buildTerrain());
-   99|     this.stage.scene.add(buildSea());
-  100|     this.stage.scene.add(buildFoam());
-  101|     this.stage.scene.add(this.world.props.group);
-  102|     this.stage.scene.add(this.emotes.group);
-  103|     this.stage.scene.add(this.vfx.group);
-  104|     this.stage.setHome(new THREE.Vector3(0.4, 8.4, 14.2), new THREE.Vector3(0, 0.6, 0));
-  105| 
-  106|     // a berry you can see bounce before a creature eats it
-  107|     const bg = new THREE.SphereGeometry(0.085, 16, 12);
-  108|     const bc = new Float32Array(bg.getAttribute('position').count * 3);
-  109|     const ba = new THREE.Color('#e8475f');
-  110|     const bb = new THREE.Color('#8f1f33');
-  111|     const bp = bg.getAttribute('position') as THREE.BufferAttribute;
-  112|     for (let i = 0; i < bp.count; i++) {
-  113|       const c = ba.clone().lerp(bb, 0.5 - bp.getY(i) * 0.5);
-  114|       bc[i * 3] = c.r; bc[i * 3 + 1] = c.g; bc[i * 3 + 2] = c.b;
-  115|     }
-  116|     bg.setAttribute('color', new THREE.BufferAttribute(bc, 3));
-  117|     this.berryGeo = bg;
-  118| 
-  119|     for (const id of HERO_IDS) {
-  120|       for (let i = 0; i < 2; i++) this.spawn(id, this.world.randomSpot(this.rng), true);
-  121|     }
-  122| 
-  123|     // v16: continue the player's island if a save exists (never under automation; ?fresh skips)
-  124|     const saved = readSave();
-  125|     if (saved && !this.loadState(JSON.stringify(saved))) clearSave();
-  126|     if (typeof window !== 'undefined') {
-  127|       window.addEventListener('keydown', (e) => {
-  128|         const tg = e.target;
-  129|         if (tg instanceof HTMLInputElement || tg instanceof HTMLTextAreaElement) return;
-  130|         if (e.shiftKey && (e.key === 'N' || e.key === 'n')) { clearSave(); location.reload(); }
-  131|       });
-  132|       window.addEventListener('beforeunload', () => this.autosave());
-  133|     }
-  134| 
-  135|     this.loop = new Loop(
-  136|       (dt) => this.step(dt),
-  137|       (_a, dt) => {
-  138|         stats.beginFrame();
-  139|         this.stage.update(dt);
-  140|         this.vfx.update(dt, this.stage.camera);
-  141|         this.stage.render(dt * 1000);
-  142|         if (this.carriedAgent) this.updateCarried(this.stage.camera);
-  143|       },
-  144|       60,
-  145|     );
-  146|   }
-  147| 
-  148|   start(): void { this.loop.start(); }
-  149|   stop(): void { this.loop.stop(); }
-  150| 
-  151|   heroIdOf(a: Agent): HeroId | undefined { return this.heroOf.get(a.id); }
-  152| 
-  153|   /** v16: the whole island as JSON (species, DNA, name seed, position, needs). */
-  154|   saveState(): string {
-  155|     const f: SaveFile = { v: 1, build: BUILD_LABEL, seed: this.seed, simTime: this.simTime, day: this.world.day, creatures: [] };
-  156|     for (const a of this.agents) {
-  157|       const hero = this.heroOf.get(a.id);
-  158|       if (!hero) continue;
-  159|       const b = this.brains.get(a.id);
-  160|       f.creatures.push({
-  161|         hero, dna: a.dna, seed: this.seedOf.get(a.id) ?? 0,
-  162|         x: a.pos.x, z: a.pos.z, h: a.heading,
-  163|         needs: b ? { ...(b.needs as unknown as Record<string, number>) } : undefined,
-  164|       });
-  165|     }
-  166|     return JSON.stringify(f);
-  167|   }
-  168| 
-  169|   /** v16: replace the island with a saved one. Returns false (and changes nothing) on a bad file. */
-  170|   loadState(json: string): boolean {
-  171|     let f: SaveFile;
-  172|     try { f = JSON.parse(json) as SaveFile; } catch { return false; }
-  173|     if (!f || f.v !== 1 || !Array.isArray(f.creatures) || !f.creatures.length) return false;
-  174|     this.endInspect();
-  175|     for (const a of [...this.agents]) this.remove(a);
-  176|     this.choreo.length = 0;
-  177|     for (const c of f.creatures) {
-  178|       try {
-  179|         const a = this.spawn(c.hero, new THREE.Vector3(c.x, heightAt(c.x, c.z), c.z), true, c.dna, c.seed);
-  180|         const b = this.brains.get(a.id);
-  181|         if (b && c.needs) Object.assign(b.needs as unknown as Record<string, number>, c.needs);
-  182|       } catch { /* skip one bad record, keep the rest */ }
-  183|     }
-  184|     if (typeof f.day === 'number' && !this.dayFrozen) this.world.day = f.day;
-  185|     return this.agents.length > 0;
-  186|   }
-  187| 
-  188|   autosave(): void { if (this.agents.length) writeSave(this.saveState()); }
-  189| 
-  190|   /** v16 LOD: brains of creatures far from the camera think every 3rd step on the accumulated dt. */
-  191|   private brainDt(a: Agent, dt: number): number {
-  192|     const far = this.stage.camera.position.distanceTo(a.pos) > 16;
-  193|     const acc = (this.brainAcc.get(a.id) ?? 0) + dt;
-  194|     if (far && (this.lodTick + a.id) % 3 !== 0) { this.brainAcc.set(a.id, acc); return 0; }
-  195|     this.brainAcc.set(a.id, 0);
-  196|     return acc;
-  197|   }
-  198| 
-  199|   /** v9 G key: 0 none, 1 pitch+, 2 roll+, 3 left limb forward, 4 wave+. */
-  200|   testPose = 0;
-  201|   /** v9 diagnostic: strip the pivot juice while measuring foot slip */
-  202|   quietPivot = false;
-  203|   /** v9: captures freeze the day clock (0.5 = noon) so lighting never drifts */
-  204|   dayFrozen = false;
-  205|   frozenDay = 0.5;
-  206| 
-  207|   setDay(v: number): void {
-  208|     this.dayFrozen = true;
-  209|     this.frozenDay = v;
-  210|     this.world.day = v;
-  211|     this.world.stage.setDayNight(v);
-  212|   }
-  213| 
-  214|   step(dt: number): void {
-  215|     this.simTime += dt;
-  216|     this.lodTick++;
-  217|     this.saveTimer += dt;
-  218|     if (this.saveTimer > 15) { this.saveTimer = 0; this.autosave(); }
-  219|     this.world.update(dt);
-  220|     if (this.dayFrozen) {
-  221|       this.world.day = this.frozenDay;
-  222|       this.world.stage.setDayNight(this.frozenDay);
-  223|     }
-  224|     for (const a of this.agents) { a.debugPose = this.testPose; a.noPivotJuice = this.quietPivot; }
-  225|     this.runChoreo(dt);
-  226|     this.tickDrops(dt);
-  227| 
-  228|     for (const a of this.agents) {
-  229|       const ov = this.overrides.get(a.id) ?? 0;
-  230|       if (ov > 0) this.overrides.set(a.id, ov - dt);
-  231|       const b = this.brains.get(a.id);
-  232|       if (b && this.brainEnabled && ov <= 0) {
-  233|         const bdt = this.brainDt(a, dt);
-  234|         if (bdt > 0) {
-  235|           b.update(bdt, a, this.world);
-  236|           const want = ANIM_ACTION[b.action] ?? 'none';
-  237|           if (a.action !== want && a.action !== 'petRoll' && a.action !== 'chomp' && a.action !== 'wave') a.begin(want);
-  238|         }
-  239|       }
-  240|       a.update(dt);
-  241|     }
-  242| 
-  243|     // ---- petting: the motion layer owns the pose, its roll-over at 2 s and
-  244|     //      the heart beat; the Sim only decides how long it lasts -------------
-  245|     if (this.petting) {
-  246|       const p = this.petting;
-  247|       this.petHold += dt;
-  248|       p.mood = this.petHold > 2 ? 'love' : 'happy';
-  249|       p.wiggle = 1;
-  250|     }
+   32| import { Sfx } from './audio';
+   33| 
+   34| export type Tool = 'none' | 'spawn' | 'call' | 'feed' | 'ball' | 'pet' | 'carry' | 'inspect';
+   35| 
+   36| /** brain action -> the additive pose the one animator plays. */
+   37| const ANIM_ACTION: Record<string, AnimAction> = {
+   38|   wander: 'none', investigate: 'sniff', drink: 'sniff', hide: 'none', idle: 'none',
+   39|   eat: 'eat', nap: 'sleep', greet: 'greet', playChase: 'play', follow: 'none',
+   40|   flee: 'startle', pushBall: 'play',
+   41| };
+   42| 
+   43| export interface SimEvent { t: number; kind: string; name: string }
+   44| export interface ToolTarget { agent: Agent | null; ground: THREE.Vector3 | null }
+   45| 
+   46| interface Choreo { at: number; t: number; fn: () => void }
+   47| interface DroppedBerry { mesh: THREE.Mesh; vel: THREE.Vector3; life: number }
+   48| 
+   49| export class Sim {
+   50|   readonly stage: Stage;
+   51|   readonly world: World;
+   52|   readonly emotes: Emotes;
+   53|   readonly vfx: Vfx;
+   54|   readonly agents: Agent[] = [];
+   55|   readonly brains = new Map<number, Brain>();
+   56|   readonly events: SimEvent[] = [];
+   57|   /** v17: procedural audio */
+   58|   readonly sfx = new Sfx();
+   59|   /** v17 profiler (ms, accumulated; watch.mjs resets it) */
+   60|   prof = { brain: 0, agent: 0 };
+   61|   private _cd = new THREE.Vector3();
+   62|   private camDist(x: number, y: number, z: number): number { return this.stage.camera.position.distanceTo(this._cd.set(x, y, z)); }
+   63|   tool: Tool = 'none';
+   64|   spawnSpecies: HeroId | null = null;
+   65|   selected: Agent | null = null;
+   66|   follow: Agent | null = null;
+   67|   carried: Agent | null = null;
+   68|   petting: Agent | null = null;
+   69|   simTime = 0;
+   70|   brainEnabled = true;
+   71|   /** inspection camera: eased fly-in, released with Esc */
+   72|   inspectT = 0;
+   73|   private inspectTarget: Agent | null = null;
+   74|   private rng: () => number;
+   75|   private loop: Loop;
+   76|   private seed: number;
+   77|   private lastTickMs = 0;
+   78|   private carriedAgent = false;
+   79|   private tmp = new THREE.Vector3();
+   80|   private choreo: Choreo[] = [];
+   81|   private drops: DroppedBerry[] = [];
+   82|   private berryGeo!: THREE.SphereGeometry;
+   83|   private carryVel = new THREE.Vector3();
+   84|   private petHold = 0;
+   85|   private overrides = new Map<number, number>();
+   86|   private tagLayer: HTMLElement | null = null;
+   87|   private tagEls = new Map<number, HTMLDivElement>();
+   88|   private trampleTimer = 0;
+   89|   /** v16: species + name seed per creature, for save/load */
+   90|   private heroOf = new Map<number, HeroId>();
+   91|   private seedOf = new Map<number, number>();
+   92|   /** v16 brain LOD accumulators */
+   93|   private brainAcc = new Map<number, number>();
+   94|   private lodTick = 0;
+   95|   private saveTimer = 0;
+   96| 
+   97|   constructor(canvas: HTMLCanvasElement, seed = 20261001) {
+   98|     buildMaterials();
+   99|     this.emotes = new Emotes();
+  100|     this.stage = new Stage(canvas);
+  101|     this.vfx = new Vfx();
+  102|     this.rng = mulberry32(seed);
+  103|     this.seed = seed;
+  104|     this.world = new World(this.stage);
+  105|     this.stage.scene.add(buildTerrain());
+  106|     this.stage.scene.add(buildSea());
+  107|     this.stage.scene.add(buildFoam());
+  108|     this.stage.scene.add(this.world.props.group);
+  109|     this.stage.scene.add(this.emotes.group);
+  110|     this.stage.scene.add(this.vfx.group);
+  111|     this.stage.setHome(new THREE.Vector3(0.4, 8.4, 14.2), new THREE.Vector3(0, 0.6, 0));
+  112| 
+  113|     // a berry you can see bounce before a creature eats it
+  114|     const bg = new THREE.SphereGeometry(0.085, 16, 12);
+  115|     const bc = new Float32Array(bg.getAttribute('position').count * 3);
+  116|     const ba = new THREE.Color('#e8475f');
+  117|     const bb = new THREE.Color('#8f1f33');
+  118|     const bp = bg.getAttribute('position') as THREE.BufferAttribute;
+  119|     for (let i = 0; i < bp.count; i++) {
+  120|       const c = ba.clone().lerp(bb, 0.5 - bp.getY(i) * 0.5);
+  121|       bc[i * 3] = c.r; bc[i * 3 + 1] = c.g; bc[i * 3 + 2] = c.b;
+  122|     }
+  123|     bg.setAttribute('color', new THREE.BufferAttribute(bc, 3));
+  124|     this.berryGeo = bg;
+  125| 
+  126|     for (const id of HERO_IDS) {
+  127|       for (let i = 0; i < 2; i++) this.spawn(id, this.world.randomSpot(this.rng), true);
+  128|     }
+  129| 
+  130|     // v16: continue the player's island if a save exists (never under automation; ?fresh skips)
+  131|     const saved = readSave();
+  132|     if (saved && !this.loadState(JSON.stringify(saved))) clearSave();
+  133|     if (typeof window !== 'undefined') {
+  134|       window.addEventListener('keydown', (e) => {
+  135|         const tg = e.target;
+  136|         if (tg instanceof HTMLInputElement || tg instanceof HTMLTextAreaElement) return;
+  137|         if (e.shiftKey && (e.key === 'N' || e.key === 'n')) { clearSave(); location.reload(); }
+  138|       });
+  139|       window.addEventListener('beforeunload', () => this.autosave());
+  140|     }
+  141| 
+  142|     this.loop = new Loop(
+  143|       (dt) => this.step(dt),
+  144|       (_a, dt) => {
+  145|         stats.beginFrame();
+  146|         this.stage.update(dt);
+  147|         this.vfx.update(dt, this.stage.camera);
+  148|         this.stage.render(dt * 1000);
+  149|         if (this.carriedAgent) this.updateCarried(this.stage.camera);
+  150|       },
+  151|       60,
+  152|     );
+  153|   }
+  154| 
+  155|   start(): void { this.loop.start(); }
+  156|   stop(): void { this.loop.stop(); }
+  157| 
+  158|   heroIdOf(a: Agent): HeroId | undefined { return this.heroOf.get(a.id); }
+  159| 
+  160|   /** v16: the whole island as JSON (species, DNA, name seed, position, needs). */
+  161|   saveState(): string {
+  162|     const f: SaveFile = { v: 1, build: BUILD_LABEL, seed: this.seed, simTime: this.simTime, day: this.world.day, creatures: [] };
+  163|     for (const a of this.agents) {
+  164|       const hero = this.heroOf.get(a.id);
+  165|       if (!hero) continue;
+  166|       const b = this.brains.get(a.id);
+  167|       f.creatures.push({
+  168|         hero, dna: a.dna, seed: this.seedOf.get(a.id) ?? 0,
+  169|         x: a.pos.x, z: a.pos.z, h: a.heading,
+  170|         needs: b ? { ...(b.needs as unknown as Record<string, number>) } : undefined,
+  171|       });
+  172|     }
+  173|     return JSON.stringify(f);
+  174|   }
+  175| 
+  176|   /** v16: replace the island with a saved one. Returns false (and changes nothing) on a bad file. */
+  177|   loadState(json: string): boolean {
+  178|     let f: SaveFile;
+  179|     try { f = JSON.parse(json) as SaveFile; } catch { return false; }
+  180|     if (!f || f.v !== 1 || !Array.isArray(f.creatures) || !f.creatures.length) return false;
+  181|     this.endInspect();
+  182|     for (const a of [...this.agents]) this.remove(a);
+  183|     this.choreo.length = 0;
+  184|     for (const c of f.creatures) {
+  185|       try {
+  186|         const a = this.spawn(c.hero, new THREE.Vector3(c.x, heightAt(c.x, c.z), c.z), true, c.dna, c.seed);
+  187|         // v17: exact restore (place() re-rolls spots in shallows / past the walk edge)
+  188|         a.pos.set(c.x, heightAt(c.x, c.z), c.z);
+  189|         a.heading = c.h;
+  190|         a.rig.root.position.copy(a.pos);
+  191|         a.rig.root.rotation.set(0, c.h, 0);
+  192|         const b = this.brains.get(a.id);
+  193|         if (b && c.needs) Object.assign(b.needs as unknown as Record<string, number>, c.needs);
+  194|       } catch { /* skip one bad record, keep the rest */ }
+  195|     }
+  196|     if (typeof f.day === 'number' && !this.dayFrozen) this.world.day = f.day;
+  197|     return this.agents.length > 0;
+  198|   }
+  199| 
+  200|   autosave(): void { if (this.agents.length) writeSave(this.saveState()); }
+  201| 
+  202|   /** v16 LOD: brains of creatures far from the camera think every 3rd step on the accumulated dt. */
+  203|   private brainDt(a: Agent, dt: number): number {
+  204|     const far = this.stage.camera.position.distanceTo(a.pos) > 16;
+  205|     const acc = (this.brainAcc.get(a.id) ?? 0) + dt;
+  206|     if (far && (this.lodTick + a.id) % 3 !== 0) { this.brainAcc.set(a.id, acc); return 0; }
+  207|     this.brainAcc.set(a.id, 0);
+  208|     return acc;
+  209|   }
+  210| 
+  211|   /** v9 G key: 0 none, 1 pitch+, 2 roll+, 3 left limb forward, 4 wave+. */
+  212|   testPose = 0;
+  213|   /** v9 diagnostic: strip the pivot juice while measuring foot slip */
+  214|   quietPivot = false;
+  215|   /** v9: captures freeze the day clock (0.5 = noon) so lighting never drifts */
+  216|   dayFrozen = false;
+  217|   frozenDay = 0.5;
+  218| 
+  219|   setDay(v: number): void {
+  220|     this.dayFrozen = true;
+  221|     this.frozenDay = v;
+  222|     this.world.day = v;
+  223|     this.world.stage.setDayNight(v);
+  224|   }
+  225| 
+  226|   step(dt: number): void {
+  227|     this.simTime += dt;
+  228|     this.lodTick++;
+  229|     this.saveTimer += dt;
+  230|     if (this.saveTimer > 15) { this.saveTimer = 0; this.autosave(); }
+  231|     this.world.update(dt);
+  232|     this.sfx.ambient(dt, this.stage.day);
+  233|     if (this.dayFrozen) {
+  234|       this.world.day = this.frozenDay;
+  235|       this.world.stage.setDayNight(this.frozenDay);
+  236|     }
+  237|     for (const a of this.agents) { a.debugPose = this.testPose; a.noPivotJuice = this.quietPivot; }
+  238|     this.runChoreo(dt);
+  239|     this.tickDrops(dt);
+  240| 
+  241|     for (const a of this.agents) {
+  242|       const ov = this.overrides.get(a.id) ?? 0;
+  243|       if (ov > 0) this.overrides.set(a.id, ov - dt);
+  244|       const b = this.brains.get(a.id);
+  245|       if (b && this.brainEnabled && ov <= 0) {
+  246|         const bdt = this.brainDt(a, dt);
+  247|         if (bdt > 0) {
+  248|           const tb = performance.now();
+  249|           b.update(bdt, a, this.world);
+  250|           this.prof.brain += performance.now() - tb;
