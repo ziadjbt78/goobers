@@ -7,11 +7,15 @@
  *
  * The aim step is child-offset aware: a splayed insect coxa whose child sits
  * sideways off the bone axis still lands its knee exactly on the solved joint.
- * Assuming "the child is on local -Y" is what made the ZIK feet miss their
- * plant targets by ~0.19 units.
+ *
+ * v19 EXACT path (World): the whole solve runs in the hip parent's OWN space,
+ * squash included, and every aim is a minimal arc from the bone's rest
+ * direction. That removes the world-frame twist (heading-dependent flips on
+ * splayed legs, phantom knee rates) and the squash-shear ankle miss. The
+ * legacy path (pedestal / Heroes) is untouched.
  */
 import * as THREE from 'three';
-import { solveIK2 } from './ik';
+import { solveIK2, ikLast } from './ik';
 
 /** The conventional "down" limb axis, kept for callers that use it as a hint. */
 export const LIMB_AXIS = new THREE.Vector3(0, -1, 0);
@@ -69,15 +73,61 @@ export interface LegSolveInput {
   /** previous knee position in the hip-parent's local space. Read to keep the
    *  solve on the same branch, then written back with the new knee. */
   prevKnee?: THREE.Vector3;
+  /** v19: exact parent-space solve (World path). */
+  exact?: boolean;
+  /** v19: world rotation the foot holds (creature heading). Default: world identity. */
+  footWorld?: THREE.Quaternion;
+}
+
+const _xq = new THREE.Quaternion();
+const _xinv = new THREE.Quaternion();
+const _xh = new THREE.Quaternion();
+const _xt = new THREE.Vector3();
+const _xr = new THREE.Vector3();
+const _xp = new THREE.Vector3();
+const _xk = new THREE.Vector3();
+const _xu = new THREE.Vector3();
+const _xd = new THREE.Vector3();
+
+function solveLegExact(i: LegSolveInput, hipParent: THREE.Object3D): boolean {
+  // getWorldQuaternion / worldToLocal refresh the ancestor chain themselves
+  const pw = hipParent.getWorldQuaternion(_xq);
+  const targetLocal = hipParent.worldToLocal(_xt.copy(i.targetWorld));
+  const hipLocal = _xr.copy(i.hip.position);
+  const poleLocal = _xp.copy(i.poleWorld).applyQuaternion(_xinv.copy(pw).invert()).normalize();
+  const L1 = i.knee.position.length();
+  const L2 = i.ankle.position.length();
+  solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _xk, i.prevKnee, true);
+
+  // hip: minimal arc from its rest child direction onto the solved knee, in parent space
+  _xu.copy(i.knee.position).normalize();
+  _xd.copy(_xk).sub(hipLocal).normalize();
+  i.hip.quaternion.setFromUnitVectors(_xu, _xd);
+
+  // knee: same, in the hip's frame, aiming the shin at the target
+  _xh.copy(i.hip.quaternion).invert();
+  _xd.copy(targetLocal).sub(hipLocal).applyQuaternion(_xh).sub(i.knee.position).normalize();
+  _xu.copy(i.ankle.position).normalize();
+  i.knee.quaternion.setFromUnitVectors(_xu, _xd);
+
+  // ankle: foot flat on the ground, facing the creature's heading when given
+  _xh.copy(pw).multiply(i.hip.quaternion).multiply(i.knee.quaternion).invert();
+  if (i.footWorld) _xh.multiply(i.footWorld);
+  i.ankle.quaternion.copy(_xh);
+
+  if (i.prevKnee) i.prevKnee.copy(_xk);
+  return ikLast.fallback;
 }
 
 /**
  * Solve one leg. The hip's position is never touched; only the hip and knee
  * rotations move, and the ankle is levelled to the world so the foot stays flat.
+ * Returns true when the pole grazed the limb axis (forensics).
  */
-export function solveLeg(i: LegSolveInput): void {
+export function solveLeg(i: LegSolveInput): boolean {
   const hipParent = i.hip.parent;
-  if (!hipParent) return;
+  if (!hipParent) return false;
+  if (i.exact) return solveLegExact(i, hipParent);
   hipParent.updateMatrixWorld(true);
 
   const pw = new THREE.Quaternion();
@@ -90,8 +140,7 @@ export function solveLeg(i: LegSolveInput): void {
   const hipLocal = _root.copy(i.hip.position);
   const poleLocal = _pole.copy(i.poleWorld).applyQuaternion(pwInv).normalize();
 
-  // Segment lengths come straight off the bone rest offsets. Deriving them here
-  // means no caller can pass a length measured in the wrong space.
+  // Segment lengths come straight off the bone rest offsets.
   const L1 = _lenA.copy(i.knee.position).length();
   const L2 = _lenB.copy(i.ankle.position).length();
   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _knee, i.prevKnee);
@@ -113,6 +162,7 @@ export function solveLeg(i: LegSolveInput): void {
 
   // remember this frame's knee so tomorrow's solve stays on the same branch
   if (i.prevKnee) i.prevKnee.copy(_knee);
+  return false;
 }
 
 /** A soft, critically damped 1D spring used for ears, tails and antennae. */

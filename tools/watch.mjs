@@ -93,7 +93,7 @@ await safe('freeRun', async () => {
           if (!a.motion.busy && r > (o.wJ ?? 0)) {
             o.wJ = r; o.wJBone = `${b.name}(${L.mode})`;
             const V = a.pos.constructor; const hp = L.hip.getWorldPosition(new V()), ap = L.ankle.getWorldPosition(new V());
-            o.wJctx = { rr: hp.distanceTo(ap) / Math.max(1e-4, L.reachW || 1), err: L.err ?? 0, landT: L.landT ?? 0, cd: a.hero.crouchD ?? 0, act: a.action, lifted: !!L.lifted, kick: !!(a.kicking && a.kicking.has && a.kicking.has(L.index)) };
+            o.wJctx = { rr: hp.distanceTo(ap) / Math.max(1e-4, L.reachW || 1), err: L.err ?? 0, landT: L.landT ?? 0, cd: a.hero.crouchD ?? 0, act: a.action, lifted: !!L.lifted, kick: !!(a.kicking && a.kicking.has && a.kicking.has(L.index)), bendR: L.bendRate ?? 0, fb: !!L.fb };
           }
           if (r > 20) o.legJFrames = (o.legJFrames ?? 0) + 1;
           q.copy(b.quaternion); }); });
@@ -164,7 +164,7 @@ await safe('freeRun', async () => {
     log(`    ${x.sp} leg ${x.leg}: slip ${(x.slip * 100).toFixed(1)} jump ${(x.jump * 100).toFixed(1)} cm | reach ${x.rr.toFixed(2)} | IK ${(x.err * 100).toFixed(1)} post ${(x.perr * 100).toFixed(1)} cm | ${x.busy ? 'ACTION' : 'walk'} | ${x.cause}`);
   for (const [sp, o] of Object.entries(free.out)) if (o.legJ) log(`  ${sp.padEnd(6)} LEG joint max ${o.legJ.toFixed(1)} rad/s on ${o.legJBone} | leg frames >20: ${o.legJFrames ?? 0}`);
   for (const [sp, o] of Object.entries(free.out)) if (o.bodyJ) log(`  ${sp.padEnd(6)} BODY snap max ${o.bodyJ.toFixed(1)} rad/s (rendered) during '${o.bodyAct}' | raw target ${(o.rawMax ?? 0).toFixed(1)} rad/s during '${o.rawAct ?? '-'}' busy ${!!o.rawBusy} roll-over ${(o.rawPiv ?? 0).toFixed(2)} rad`);
-  for (const [sp, o] of Object.entries(free.out)) if (o.wJctx) { const c = o.wJctx; log(`  ${sp.padEnd(6)} WALK joint peak ${o.wJ.toFixed(1)} on ${o.wJBone} | hip-foot/reach ${c.rr.toFixed(3)} | IK miss ${(c.err * 100).toFixed(2)} cm | since land ${c.landT.toFixed(2)} s | crouch step ${(c.cd * 100).toFixed(2)} cm | action '${c.act}' | lifted ${c.lifted} | kick ${c.kick}`); }
+  for (const [sp, o] of Object.entries(free.out)) if (o.wJctx) { const c = o.wJctx; log(`  ${sp.padEnd(6)} WALK joint peak ${o.wJ.toFixed(1)} on ${o.wJBone} | hip-foot/reach ${c.rr.toFixed(3)} | IK miss ${(c.err * 100).toFixed(2)} cm | since land ${c.landT.toFixed(2)} s | crouch step ${(c.cd * 100).toFixed(2)} cm | action '${c.act}' | lifted ${c.lifted} | kick ${c.kick} | knee BEND rate ${(c.bendR ?? 0).toFixed(1)} rad/s (rest of peak = twist) | pole fallback ${c.fb}`); }
   for (const [sp, o] of Object.entries(free.out)) {
     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);

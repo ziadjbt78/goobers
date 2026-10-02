@@ -422,7 +422,7 @@ export class Agent implements HashEntry {
       const bone = this.handle.bones[t.feet[i].chain[2]];
       const hipBone = this.handle.bones[t.feet[i].chain[0]];
       const kneeBone = this.handle.bones[t.feet[i].chain[1]];
-      if (bone) bone.getWorldPosition(f.pos);
+      if (bone) f.pos.setFromMatrixPosition(bone.matrixWorld); // v19: skeleton refreshed above
       // the stance/swing flag now comes from the real world-planting solver
       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
       const leg = legs?.find((l) => l.index === i);
@@ -431,8 +431,8 @@ export class Agent implements HashEntry {
       f.swing = 0;
       if (!swinging && hipBone && kneeBone && bone) {
         // v12: live world-space segment lengths; overstretch = leg locked straight
-        const hw = hipBone.getWorldPosition(this._hip);
-        const kw = kneeBone.getWorldPosition(this._kneeW);
+        const hw = this._hip.setFromMatrixPosition(hipBone.matrixWorld);
+        const kw = this._kneeW.setFromMatrixPosition(kneeBone.matrixWorld);
         const reach = (hw.distanceTo(kw) + kw.distanceTo(f.pos)) * 0.98;
         if (hw.distanceTo(f.pos) > reach) this.overstretchFrames++;
       }

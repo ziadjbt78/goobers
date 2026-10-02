@@ -787,9 +787,10 @@ export class HeroAnimator {
     const kH = 0.92 - 0.12 * Math.min(1, Math.max(0, this.locomotionW));
     let need = 0;
     for (const L of this.legs) {
-      const hip = L.hip.getWorldPosition(this._vw);
-      const knee = L.knee.getWorldPosition(this._kw);
-      const ank = L.ankle.getWorldPosition(this._aw);
+      // v19: matrices are fresh from the skeleton update above; no per-call chain refresh
+      const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
+      const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
+      const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
       L.reachW = hip.distanceTo(knee) + knee.distanceTo(ank);
       this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(h.group.matrixWorld);
       const gy = (ground ? ground(this._rw.x, this._rw.z) : h.group.position.y) + L.plant.y;
@@ -832,7 +833,7 @@ export class HeroAnimator {
         }
       }
       this._worldFootTarget(L, this._ft, dt);
-      const hip = L.hip.getWorldPosition(this._hw2);
+      const hip = this._hw2.setFromMatrixPosition(L.hip.matrixWorld);
       const rMax = 0.985 * L.reachW;
       // v16: a planted foot the body has risen away from lifts STRAIGHT UP on its
       // lock (keeps x/z) instead of being dragged sideways toward the hip
@@ -851,11 +852,14 @@ export class HeroAnimator {
       this._goal.copy(this._ft);
       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
+      const LX = L as unknown as { fb: boolean; bendRate: number; bendPrev: number };
+      LX.fb = false;
       let err = 0;
       for (let it = 0; it < 3; it++) {
-        solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal });
-        L.ankle.updateWorldMatrix(true, false);
-        L.ankle.getWorldPosition(this._aw);
+        // v19 EXACT solve: in the hip parent's own (squashed) space, no world-frame twist, feet face the heading
+        if (solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal, exact: true, footWorld: gq })) LX.fb = true;
+        L.hip.updateWorldMatrix(false, true);
+        this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
         const ex = this._goal.x - this._aw.x, ey = this._goal.y - this._aw.y, ez = this._goal.z - this._aw.z;
         err = Math.hypot(ex, ey, ez);
         if (err < 0.0015) break;
@@ -871,12 +875,22 @@ export class HeroAnimator {
         const ang = 2 * Math.acos(Math.min(1, Math.abs(bone.quaternion.dot(q))));
         if (ang > maxD && ang > 1e-6) { _lim.copy(bone.quaternion); bone.quaternion.copy(q).slerp(_lim, maxD / ang); }
       }
-      L.ankle.updateWorldMatrix(true, false);
-      L.postErr = L.ankle.getWorldPosition(this._aw).distanceTo(this._goal);
+      L.hip.updateWorldMatrix(false, true);
+      L.postErr = this._aw.setFromMatrixPosition(L.ankle.matrixWorld).distanceTo(this._goal);
+      // v19 forensics: knee BEND rate (what the eye sees); quaternion rate minus this is twist
+      {
+        this._b1.setFromMatrixPosition(L.knee.matrixWorld);
+        this._b2.copy(this._aw).sub(this._b1);
+        this._b1.sub(hip);
+        const den = this._b1.length() * this._b2.length();
+        const bend = den > 1e-9 ? Math.acos(THREE.MathUtils.clamp(this._b1.dot(this._b2) / den, -1, 1)) : 0;
+        LX.bendRate = LX.bendPrev >= 0 && dt > 0 ? Math.abs(bend - LX.bendPrev) / dt : 0;
+        LX.bendPrev = bend;
+      }
       L.prev[0].copy(L.hip.quaternion);
       L.prev[1].copy(L.knee.quaternion);
       L.prev[2].copy(L.ankle.quaternion);
-      if (L.landPending) { L.ankle.updateWorldMatrix(true, false); L.ankle.getWorldPosition(L.lock); L.landPending = false; }
+      if (L.landPending) { L.lock.setFromMatrixPosition(L.ankle.matrixWorld); L.landPending = false; }
     }
     if (this.petted) {
       const back = this.legs[this.legs.length - 1];
@@ -904,6 +918,8 @@ export class HeroAnimator {
   }
 
   private _hw2 = new THREE.Vector3();
+  private _b1 = new THREE.Vector3();
+  private _b2 = new THREE.Vector3();
   private _goal = new THREE.Vector3();
   private _lk = new THREE.Vector3();
   private _sc = new THREE.Vector3();
@@ -927,9 +943,9 @@ export class HeroAnimator {
     const ground = this.drive.groundY;
     const gy = (x: number, z: number): number => (ground ? ground(x, z) : gp.y) + L.plant.y;
 
-    const hip = L.hip.getWorldPosition(this._vw);
-    const knee = L.knee.getWorldPosition(this._kw);
-    const ank = L.ankle.getWorldPosition(this._aw);
+    const hip = this._vw.setFromMatrixPosition(L.hip.matrixWorld);
+    const knee = this._kw.setFromMatrixPosition(L.knee.matrixWorld);
+    const ank = this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
     const reach = Math.max(1e-3, hip.distanceTo(knee) + knee.distanceTo(ank));
     const rest = this._rw.set(L.plant.x, 0, L.plant.z).applyMatrix4(g.matrixWorld);
     rest.y = gy(rest.x, rest.z);

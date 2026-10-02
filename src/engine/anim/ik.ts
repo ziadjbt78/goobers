@@ -16,15 +16,22 @@ export interface IK2Result {
   extension: number;
 }
 
+/** v19: did the LAST solveIK2 call fall back because the pole grazed the limb axis? */
+export const ikLast = { fallback: false };
+
 /**
  * Two-bone analytic IK with a pole vector. One solver drives 2, 4, 6 and 8 legs.
  * Deterministic, allocation-free in the hot path, exactly unit-tested.
  *
  * `prev` (optional) is the knee position solved on the previous frame. A two-bone
  * solve has TWO valid answers mirrored across the root->target axis, and near
- * full extension a hair of hip motion flips which one is "nearest" — that jump
+ * full extension a hair of hip motion flips which one is "nearest"; that jump
  * is the classic IK pop. Passing the previous knee picks the answer on the same
  * branch, so the knee can never snap across in a single frame.
+ *
+ * `soft` (v19, World path): when the pole grazes the limb axis the knee plane
+ * BLENDS toward the previous knee's plane instead of switching to world up.
+ * Legacy (pedestal) calls keep the exact old behaviour.
  */
 export function solveIK2(
   root: THREE.Vector3,
@@ -34,6 +41,7 @@ export function solveIK2(
   pole: THREE.Vector3,
   out: THREE.Vector3,
   prev?: THREE.Vector3,
+  soft = false,
 ): IK2Result {
   _axis.copy(target).sub(root);
   let d = _axis.length();
@@ -52,15 +60,42 @@ export function solveIK2(
   const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
 
   _perp.copy(pole).addScaledVector(_axis, -pole.dot(_axis));
-  if (_perp.lengthSq() < 0.04) {
-    // The pole is all but parallel to the limb, so anything derived from it is
-    // noise — and noise here is what flips the knee from one frame to the next.
-    // Fall back deterministically: world up, then world X.
-    _tmp.set(0, 1, 0).addScaledVector(_axis, -_axis.y);
-    if (_tmp.lengthSq() < 0.04) _tmp.set(1, 0, 0).addScaledVector(_axis, -_axis.x);
-    _perp.copy(_tmp);
+  const pl = _perp.lengthSq();
+  let fallback = false;
+  if (!soft) {
+    if (pl < 0.04) {
+      // The pole is all but parallel to the limb, so anything derived from it is
+      // noise. Fall back deterministically: world up, then world X.
+      fallback = true;
+      _tmp.set(0, 1, 0).addScaledVector(_axis, -_axis.y);
+      if (_tmp.lengthSq() < 0.04) _tmp.set(1, 0, 0).addScaledVector(_axis, -_axis.x);
+      _perp.copy(_tmp);
+    }
+  } else if (pl < 0.09) {
+    fallback = true;
+    let have = false;
+    if (prev) {
+      _tmp.copy(prev).sub(root);
+      _tmp.addScaledVector(_axis, -_tmp.dot(_axis));
+      if (_tmp.lengthSq() > 1e-10) have = true;
+    }
+    if (!have) {
+      _tmp.set(0, 1, 0).addScaledVector(_axis, -_axis.y);
+      if (_tmp.lengthSq() < 0.04) _tmp.set(1, 0, 0).addScaledVector(_axis, -_axis.x);
+    }
+    _tmp.normalize();
+    if (pl > 1e-10) {
+      _perp.multiplyScalar(1 / Math.sqrt(pl));
+      if (_tmp.dot(_perp) < 0) _tmp.negate();
+      const w = Math.min(1, Math.max(0, (pl - 0.01) / 0.08));
+      _perp.multiplyScalar(w).addScaledVector(_tmp, 1 - w);
+      if (_perp.lengthSq() < 1e-10) _perp.copy(_tmp);
+    } else {
+      _perp.copy(_tmp);
+    }
   }
   _perp.normalize();
+  ikLast.fallback = fallback;
 
   out.copy(root).addScaledVector(_axis, a).addScaledVector(_perp, h);
   if (prev) {

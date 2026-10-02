@@ -162,3 +162,11 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - HeroAnimator: soft IK (reach untouched to 0.93, asymptotic to 0.99) so knees never lock straight; crouch eases down (0.06 s) instead of snapping; closed-loop re-aim hard-clamps at 0.995.
 - Perf: leg solve and readFeet refresh only the skeleton, not every mesh; Euler objects reused; profiler split into preAnimate / HeroAnimator / postAnimate.
 - watch: WALK joint peak context, raw body snap, RENDER BUDGET (draw calls, triangles), BODY snap <= 20 rad/s gate.
+
+
+## v19 (batch 8)
+- pose.ts/ik.ts: new EXACT leg solve for the World path: whole solve in the hip parent's own (squashed) space, minimal-arc aims
+  from rest directions (no world-frame twist), ankle holds the creature heading. Pedestal path byte-identical.
+- ik.ts: soft pole fallback (blend toward previous knee plane) for the exact path; ikLast.fallback for forensics.
+- Perf: no full-subtree matrix refresh per solve, matrix reads instead of chain refreshes in the leg solve and readFeet.
+- watch: walk-peak line adds knee BEND rate and pole fallback. dump.sh also splits watch.mjs, Stage, World, materials.

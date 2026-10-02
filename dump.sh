@@ -4,7 +4,8 @@ set -e
 cd "$(dirname "$0")"
 rm -rf watch/src && mkdir -p watch/src
 for f in src/engine/anim/HeroAnimator.ts src/engine/agent/Agent.ts src/engine/world/Sim.ts \
-         src/engine/motion/CreatureMotion.ts src/engine/motion/Rig.ts src/engine/anim/pose.ts; do
+         src/engine/motion/CreatureMotion.ts src/engine/motion/Rig.ts src/engine/anim/pose.ts \
+         tools/watch.mjs src/engine/scene/Stage.ts src/engine/world/World.ts src/engine/render/hero/materials.ts; do
   [ -f "$f" ] || continue
   n=$(basename "$f" .ts)
   awk -v n="$n" '{ printf "%5d| %s\n", NR, $0 > sprintf("watch/src/%s_%02d.txt", n, int((NR-1)/250)) }' "$f"
