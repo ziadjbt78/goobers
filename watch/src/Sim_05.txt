@@ -1,0 +1,31 @@
+ 1251|     aB.setClock(12);
+ 1252|     hA.group.position.set(0, 0, 0);
+ 1253|     hB.group.position.set(0, 0, 0);
+ 1254|     for (let i = 0; i < aB.drive.footTargets.length; i++) {
+ 1255|       aB.drive.footTargets[i].copy(tpl.feet[i]?.plant ?? new THREE.Vector3());
+ 1256|     }
+ 1257| 
+ 1258|     let maxQuat = 0;
+ 1259|     let maxPos = 0;
+ 1260|     for (let f = 0; f < frames; f++) {
+ 1261|       aA.update(dt, null);
+ 1262|       aB.update(dt, null);
+ 1263|       hA.group.updateMatrixWorld(true);
+ 1264|       hB.group.updateMatrixWorld(true);
+ 1265|       if (f < 30) continue;
+ 1266|       for (let i = 0; i < hA.bones.length; i++) {
+ 1267|         const qa = hA.bones[i].quaternion;
+ 1268|         const qb = hB.bones[i].quaternion;
+ 1269|         const d = 1 - Math.abs(qa.dot(qb));
+ 1270|         if (d > maxQuat) maxQuat = d;
+ 1271|         const pa = new THREE.Vector3().setFromMatrixPosition(hA.bones[i].matrixWorld);
+ 1272|         const pb = new THREE.Vector3().setFromMatrixPosition(hB.bones[i].matrixWorld);
+ 1273|         const pd = pa.distanceTo(pb);
+ 1274|         if (pd > maxPos) maxPos = pd;
+ 1275|       }
+ 1276|     }
+ 1277|     hA.dispose();
+ 1278|     hB.dispose();
+ 1279|     return { maxQuat, maxPos, bones: hA.bones.length, seconds: Math.round(frames * dt * 100) / 100 };
+ 1280|   }
+ 1281| }

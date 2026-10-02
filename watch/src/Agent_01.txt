@@ -139,7 +139,7 @@
   389|       // the stance/swing flag now comes from the real world-planting solver
   390|       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
   391|       const leg = legs?.find((l) => l.index === i);
-  392|       const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree || this.kicking.has(i);
+  392|       const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree || this.kicking.has(i) || this.hero.legLifted(i);
   393|       f.swinging = swinging;
   394|       f.swing = 0;
   395|       if (!swinging && hipBone && kneeBone && bone) {

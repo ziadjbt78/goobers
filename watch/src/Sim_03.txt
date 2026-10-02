@@ -1,250 +1,250 @@
-  751|         speed: a.speed,
-  752|         feet: a.feet.map((f) => ({ pos: [f.pos.x, f.pos.y, f.pos.z] as [number, number, number], swinging: f.swinging })),
-  753|         bones,
-  754|       };
-  755|     });
-  756|     return { t: this.simTime, agents };
-  757|   }
-  758| 
-  759|   /**
-  760|    * v10 slip probe, rebuilt.
-  761|    *
-  762|    * The v9 version seeded its "previous foot" buffer from creature-space plant
-  763|    * points, which produced ~8 m/frame of nonsense. It now reads the SAME world
-  764|    * ankle positions the gate metric reads, and only counts frames where the
-  765|    * planting solver says the foot is planted.
-  766|    */
-  767|   slipProbe(seconds = 8): Record<string, { slip: number; overstretch: number; frames: number; speed: number; freq: number }> {
-  768|     const out: Record<string, { slip: number; overstretch: number; frames: number; speed: number; freq: number }> = {};
-  769|     const prevBrain = this.brainEnabled;
-  770|     this.brainEnabled = false;
-  771|     const home = this.agents.map((a) => ({ a, p: a.pos.clone(), h: a.heading }));
-  772|     const dt = 1 / 60;
-  773|     for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) {
-  774|       const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
-  775|       if (!a) continue;
-  776|       for (const o of this.agents) { o.stop(); o.begin('none'); o.debugPose = 0; }
-  777|       a.place(0, -6, 0);
-  778|       for (let i = 0; i < 40; i++) { a.goTo({ x: 0, y: 0, z: 40 }, 1); a.update(dt); }
-  779|       const prev = a.feet.map((f) => f.pos.clone());
-  780|       const prevSw = a.feet.map(() => false);
-  781|       const over0 = a.overstretchFrames;
-  782|       let worst = 0, speedSum = 0, cycle = 0;
-  783|       let lastPhase = a.motion.loco.phase;
-  784|       const steps = Math.round(seconds / dt);
-  785|       for (let i = 0; i < steps; i++) {
-  786|         a.goTo({ x: 0, y: 0, z: 60 }, 1);
-  787|         a.update(dt);
-  788|         speedSum += a.motion.loco.speed;
-  789|         if (a.motion.loco.phase < lastPhase) cycle++;
-  790|         lastPhase = a.motion.loco.phase;
-  791|         for (let k = 0; k < a.feet.length; k++) {
-  792|           const f = a.feet[k];
-  793|           if (!prevSw[k] && !f.swinging) {
-  794|             const d = f.pos.distanceTo(prev[k]);
-  795|             if (d > worst) worst = d;
-  796|           }
-  797|           prev[k].copy(f.pos);
-  798|           prevSw[k] = f.swinging;
-  799|         }
-  800|       }
-  801|       out[sp] = {
-  802|         slip: Math.round(worst * 1e4) / 1e4,
-  803|         overstretch: a.overstretchFrames - over0,
-  804|         frames: steps,
-  805|         speed: Math.round((speedSum / steps) * 1e3) / 1e3,
-  806|         freq: Math.round((cycle / seconds) * 1e3) / 1e3,
-  807|       };
-  808|     }
-  809|     for (const h of home) h.a.place(h.p.x, h.p.z, h.h);
-  810|     this.brainEnabled = prevBrain;
-  811|     return out;
-  812|   }
-  813| 
-  814|   /**
-  815|    * v10 sign check. A sign is only called VERIFIED when the magnitude clears
-  816|    * 0.02 m AND the two signs give opposite deltas. Anything else is reported as
-  817|    * unverified rather than tie-broken.
-  818|    */
-  819|   signProbe(): Record<string, { pitch: number | null; roll: number | null; limb: number | null; wave: number | null; threshold: number; evidence: Record<string, string> }> {
-  820|     type Row = { pitch: number | null; roll: number | null; limb: number | null; wave: number | null; threshold: number; evidence: Record<string, string> };
-  821|     const out: Record<string, Row> = {};
-  822|     const prevBrain = this.brainEnabled;
-  823|     this.brainEnabled = false;
-  824|     for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) {
-  825|       const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
-  826|       if (!a) continue;
-  827|       for (const o of this.agents) { o.stop(); o.debugPose = 0; }
-  828|       a.place(0, -6, 0);
-  829|       const headBone = a.handle.bones[a.template.headBone];
-  830|       const bodyBone = a.handle.bones[a.template.bodyBone];
-  831|       const tipOf = (b: THREE.Object3D): THREE.Object3D => (b.children.length ? (b.children[0] as THREE.Object3D) : b);
-  832|       const tip = a.rig.arms.length ? tipOf(a.rig.arms[0]) : tipOf(a.rig.legs[0] ?? a.rig.body);
-  833|       const footBone = a.template.feet.length ? a.handle.bones[a.template.feet[0].chain[2]] : null;
-  834|       const height = a.template.height;
-  835|       const THRESH = 0.02 * height;
-  836|       // everything is measured in the BODY BONE's own frame (its parent space),
-  837|       // not world space: a body-pivot rotation then shows up as a real
-  838|       // displacement of the head relative to that pivot
-  839|       const inBodyFrame = (v: THREE.Vector3): THREE.Vector3 => {
-  840|         const parent = bodyBone.parent ?? bodyBone;
-  841|         const inv = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
-  842|         return v.applyQuaternion(inv);
-  843|       };
-  844|       const sample = () => {
-  845|         a.handle.group.updateMatrixWorld(true);
-  846|         return {
-  847|           h: inBodyFrame(headBone.getWorldPosition(new THREE.Vector3())),
-  848|           f: footBone ? inBodyFrame(footBone.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3(),
-  849|           w: inBodyFrame(tip.getWorldPosition(new THREE.Vector3())),
-  850|         };
-  851|       };
-  852|       const delta = (pose: number, ch: 'pitch' | 'roll' | 'limb' | 'wave', sign: number) => {
-  853|         a.debugPose = 0;
-  854|         (a.rig.axes as unknown as Record<string, number>)[ch] = sign;
-  855|         a.update(1 / 60);
-  856|         const b0 = sample();
-  857|         a.debugPose = pose;
-  858|         a.update(1 / 60);
-  859|         const b1 = sample();
-  860|         return {
-  861|           fwd: b1.h.z - b0.h.z,
-  862|           lat: b1.h.x - b0.h.x,
-  863|           ff: b1.f.z - b0.f.z,
-  864|           wy: b1.w.y - b0.w.y,
-  865|         };
-  866|       };
-  867|       const pass = (dp: number, dm: number): number | null => {
-  868|         const big = Math.max(Math.abs(dp), Math.abs(dm));
-  869|         if (big <= THRESH) return null;
-  870|         if ((dp > 0) === (dm > 0)) return null;
-  871|         return dp >= dm ? 1 : -1;
-  872|       };
-  873|       out[sp] = { pitch: null, roll: null, limb: null, wave: null, threshold: Math.round(THRESH * 1e4) / 1e4, evidence: {} };
-  874|       const run = (pose: number, ch: 'pitch' | 'roll' | 'limb' | 'wave', key: 'fwd' | 'lat' | 'ff' | 'wy') => {
-  875|         const dd = delta(pose, ch, 1);
-  876|         const plus = dd[key];
-  877|         const minus = delta(pose, ch, -1)[key];
-  878|         const chosen = pass(plus, minus);
-  879|         out[sp].evidence[ch] = chosen === null
-  880|           ? `UNVERIFIED  ${key}: +1 ${plus.toFixed(4)} / -1 ${minus.toFixed(4)} m  (threshold ${THRESH.toFixed(4)})`
-  881|           : `verified    ${key}: +1 ${plus.toFixed(4)} / -1 ${minus.toFixed(4)} m -> ${chosen > 0 ? '+1' : '-1'}`;
-  882|         if (chosen !== null) (a.rig.axes as unknown as Record<string, number>)[ch] = chosen;
-  883|         return chosen;
-  884|       };
-  885|       out[sp].pitch = run(1, 'pitch', 'fwd');
-  886|       out[sp].roll = run(2, 'roll', 'lat');
-  887|       out[sp].wave = run(4, 'wave', 'wy');
-  888|       // limb is an AXIS choice, so it is probed as one
-  889|       {
-  890|         const ax0 = a.rig.axes.limb;
-  891|         const tryAxis = (ax: 'x' | 'z'): number => {
-  892|           a.debugPose = 0; a.rig.axes.limb = ax; a.update(1 / 60);
-  893|           const b0 = sample(); a.debugPose = 3; a.update(1 / 60); const b1 = sample();
-  894|           return b1.f.z - b0.f.z;
-  895|         };
-  896|         const fx = tryAxis('x'), fz = tryAxis('z');
-  897|         const ok = Math.max(Math.abs(fx), Math.abs(fz)) > THRESH;
-  898|         a.rig.axes.limb = ok ? (Math.abs(fx) >= Math.abs(fz) ? 'x' : 'z') : ax0;
-  899|         out[sp].evidence.limb = ok
-  900|           ? `verified axis '${a.rig.axes.limb}': x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd`
-  901|           : `UNVERIFIED axis: x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd (threshold ${THRESH.toFixed(4)})`;
-  902|         out[sp].limb = ok ? (a.rig.axes.limb === 'x' ? 1 : 2) : null;
-  903|         a.debugPose = 0;
-  904|       }
-  905|     }
-  906|     this.brainEnabled = prevBrain;
-  907|     return out;
-  908|   }
-  909| 
-  910|   /**
-  911|    * v11 joint-rate probe: the worst angular rate per species, the BONE it lands
-  912|    * on, and the planting state of that leg at the peak frame, so a pop can be
-  913|    * attributed instead of guessed at.
-  914|    */
-  915|   jointProbe(seconds = 20, dt = 1 / 60): Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> {
-  916|     const out: Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> = {};
-  917|     const prevBrain = this.brainEnabled;
-  918|     this.brainEnabled = true;
-  919|     const prev = new Map<number, { q: number[]; mode: string; forced: boolean }[]>();
-  920|     for (let i = 0; i < seconds / dt; i++) {
-  921|       this.step(dt);
-  922|       for (const a of this.agents) {
-  923|         const sp = a.template.name.split(' ')[0];
-  924|         const st = a.hero.legState();
-  925|         const cur = a.handle.bones.map((b) => ({
-  926|           q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w],
-  927|           mode: '', forced: false,
-  928|         }));
-  929|         const pv = prev.get(a.id);
-  930|         if (pv) {
-  931|           for (const L of a.template.feet) {
-  932|             for (let k = 0; k < 3; k++) {
-  933|               const bi = L.chain[k];
-  934|               const qa = pv[bi], qb = cur[bi];
-  935|               const dot = Math.abs(qa.q[0] * qb.q[0] + qa.q[1] * qb.q[1] + qa.q[2] * qb.q[2] + qa.q[3] * qb.q[3]);
-  936|               const rate = (2 * Math.acos(Math.min(1, dot))) / dt;
-  937|               const st0 = st.find((x) => x.index === a.template.feet.indexOf(L));
-  938|               if (rate > (out[sp]?.rate ?? 0)) {
-  939|                 out[sp] = {
-  940|                   rate: Math.round(rate * 100) / 100,
-  941|                   bone: a.handle.bones[bi].name,
-  942|                   frameType: (st0?.mode ?? 'plant') === 'swing'
-  943|                     ? (st0?.forced ? 'early-lift (reach/turn/drift guard)' : 'normal swing')
-  944|                     : 'plant',
-  945|                   wasForced: !!st0?.forced,
-  946|                 };
-  947|               }
-  948|             }
-  949|           }
-  950|         }
-  951|         prev.set(a.id, cur);
-  952|       }
-  953|     }
-  954|     this.brainEnabled = prevBrain;
-  955|     return out;
-  956|   }
-  957| 
-  958|   /**
-  959|    * v11 cadence ramp: walk -> run -> walk, sampling the REAL cycle frequency in
-  960|    * short windows so a pop at the gait transition would show up as a jump.
-  961|    */
-  962|   freqRampProbe(sp = 'PIP'): { t: number; speed: number; freq: number; stride: number }[] {
-  963|     const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
-  964|     if (!a) return [];
-  965|     const prevB = this.brainEnabled;
-  966|     this.brainEnabled = false;
-  967|     for (const o of this.agents) { o.stop(); o.debugPose = 0; }
-  968|     a.place(0, -6, 0);
-  969|     const dt = 1 / 60;
-  970|     for (let i = 0; i < 60; i++) { a.goTo({ x: 0, y: 0, z: 60 }, 0.4); a.update(dt); }
-  971|     const rows: { t: number; speed: number; freq: number; stride: number }[] = [];
-  972|     const total = 900;
-  973|     let cycle = 0, lastPhase = a.motion.loco.phase, speedSum = 0, win = 0;
-  974|     for (let i = 0; i < total; i++) {
-  975|       // 0 -> 1 -> 0 over the run
-  976|       const k = i / total;
-  977|       const th = k < 0.5 ? k * 2 : (1 - k) * 2;
-  978|       a.goTo({ x: 0, y: 0, z: 200 }, Math.max(0.35, th));
-  979|       a.update(dt);
-  980|       speedSum += a.motion.loco.speed; win++;
-  981|       if (a.motion.loco.phase < lastPhase) cycle++;
-  982|       lastPhase = a.motion.loco.phase;
-  983|       if (win >= 60) {
-  984|         const loco = a.motion.loco;
-  985|         rows.push({
-  986|           t: Math.round(i * dt * 10) / 10,
-  987|           speed: Math.round((speedSum / win) * 1e3) / 1e3,
-  988|           freq: Math.round((cycle / win) * 60 * 1e3) / 1e3,
-  989|           stride: Math.round(loco.cfg.stride * (1 + 0.4 * loco.runT()) * 1e4) / 1e4,
-  990|         });
-  991|         cycle = 0; speedSum = 0; win = 0;
-  992|       }
-  993|     }
-  994|     this.brainEnabled = prevB;
-  995|     return rows;
-  996|   }
-  997| 
-  998|   static compare = compare;
-  999| 
- 1000|   /**
+  751|       if (!el) {
+  752|         el = document.createElement('div');
+  753|         el.className = 'w-tag';
+  754|         el.textContent = a.name.split(' ')[0];
+  755|         layer.appendChild(el);
+  756|         this.tagEls.set(a.id, el);
+  757|       }
+  758|       v.copy(a.pos);
+  759|       v.y += this.templateHeight(a) * 1.34;
+  760|       camDist += cam.position.distanceTo(a.pos);
+  761|       v.project(cam);
+  762|       const behind = v.z > 1;
+  763|       const x = (v.x * 0.5 + 0.5) * w;
+  764|       const y = (-v.y * 0.5 + 0.5) * h;
+  765|       // fade out as the camera closes in — the tag is for reading from far away
+  766|       const dist = cam.position.distanceTo(a.pos);
+  767|       const op = behind ? 0 : THREE.MathUtils.clamp((dist - 6) / 6, 0, 1) * 0.92;
+  768|       el.style.transform = `translate(-50%,-100%) translate(${x.toFixed(1)}px,${y.toFixed(1)}px)`;
+  769|       el.style.opacity = op.toFixed(2);
+  770|     }
+  771|     for (const [id, el] of this.tagEls) {
+  772|       if (!this.agents.some((a) => a.id === id)) { el.remove(); this.tagEls.delete(id); }
+  773|     }
+  774|   }
+  775| 
+  776|   private templateHeight(a: Agent): number { return a.template.height * a.dna.scale; }
+  777| 
+  778|   /** Run the acceptance simulation: fixed dt, no rendering, fast. */
+  779|   headlessRun(seconds: number, dt = 1 / 60): void {
+  780|     const steps = Math.round(seconds / dt);
+  781|     for (let i = 0; i < steps; i++) {
+  782|       this.step(dt);
+  783|       this.drainBrainEvents();
+  784|     }
+  785|   }
+  786| 
+  787|   summary(): Record<string, number> {
+  788|     const out: Record<string, number> = {};
+  789|     for (const e of this.events) out[e.kind] = (out[e.kind] ?? 0) + 1;
+  790|     return out;
+  791|   }
+  792| 
+  793|   pick(ray: THREE.Raycaster): Agent | null {
+  794|     let best: Agent | null = null;
+  795|     let bestD = 1e9;
+  796|     for (const a of this.agents) {
+  797|       const hits = ray.intersectObject(a.handle.shell, false);
+  798|       if (hits.length && hits[0].distance < bestD) { bestD = hits[0].distance; best = a; }
+  799|     }
+  800|     return best;
+  801|   }
+  802| 
+  803|   actionOf(a: Agent): ActionId | null {
+  804|     return this.brains.get(a.id)?.action ?? null;
+  805|   }
+  806| 
+  807|   get terrain() { return buildTerrain; }
+  808|   get isDryCheck() { return isDry; }
+  809|   get frameMs(): number { return this.lastTickMs; }
+  810| 
+  811|   // ---- verification surface -------------------------------------------------
+  812|   pause(): void { this.loop.stop(); }
+  813|   resume(): void { this.loop.start(); }
+  814|   renderOnce(): void { this.stage.update(0); this.stage.render(0); }
+  815| 
+  816|   /** Snapshot every agent's pose, so two snapshots can be compared. */
+  817|   probe(): Probe {
+  818|     const agents = this.agents.map((a) => {
+  819|       const g = a.handle.group;
+  820|       g.updateMatrixWorld(true);
+  821|       const bones: { name: string; q: [number, number, number, number] }[] = [];
+  822|       for (const b of a.handle.bones) {
+  823|         bones.push({ name: b.name, q: [b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w] });
+  824|       }
+  825|       return {
+  826|         id: a.id,
+  827|         name: a.name,
+  828|         turnRate: a.motion.loco.cfg.turnRate,
+  829|         over: a.overstretchFrames,
+  830|         pos: [a.pos.x, a.pos.y, a.pos.z] as [number, number, number],
+  831|         heading: a.heading,
+  832|         speed: a.speed,
+  833|         feet: a.feet.map((f) => ({ pos: [f.pos.x, f.pos.y, f.pos.z] as [number, number, number], swinging: f.swinging })),
+  834|         bones,
+  835|       };
+  836|     });
+  837|     return { t: this.simTime, agents };
+  838|   }
+  839| 
+  840|   /**
+  841|    * v10 slip probe, rebuilt.
+  842|    *
+  843|    * The v9 version seeded its "previous foot" buffer from creature-space plant
+  844|    * points, which produced ~8 m/frame of nonsense. It now reads the SAME world
+  845|    * ankle positions the gate metric reads, and only counts frames where the
+  846|    * planting solver says the foot is planted.
+  847|    */
+  848|   slipProbe(seconds = 8): Record<string, { slip: number; overstretch: number; frames: number; speed: number; freq: number }> {
+  849|     const out: Record<string, { slip: number; overstretch: number; frames: number; speed: number; freq: number }> = {};
+  850|     const prevBrain = this.brainEnabled;
+  851|     this.brainEnabled = false;
+  852|     const home = this.agents.map((a) => ({ a, p: a.pos.clone(), h: a.heading }));
+  853|     const dt = 1 / 60;
+  854|     for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) {
+  855|       const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
+  856|       if (!a) continue;
+  857|       for (const o of this.agents) { o.stop(); o.begin('none'); o.debugPose = 0; }
+  858|       a.place(0, -6, 0);
+  859|       for (let i = 0; i < 40; i++) { a.goTo({ x: 0, y: 0, z: 40 }, 1); a.update(dt); }
+  860|       const prev = a.feet.map((f) => f.pos.clone());
+  861|       const prevSw = a.feet.map(() => false);
+  862|       const over0 = a.overstretchFrames;
+  863|       let worst = 0, speedSum = 0, cycle = 0;
+  864|       let lastPhase = a.motion.loco.phase;
+  865|       const steps = Math.round(seconds / dt);
+  866|       for (let i = 0; i < steps; i++) {
+  867|         a.goTo({ x: 0, y: 0, z: 60 }, 1);
+  868|         a.update(dt);
+  869|         speedSum += a.motion.loco.speed;
+  870|         if (a.motion.loco.phase < lastPhase) cycle++;
+  871|         lastPhase = a.motion.loco.phase;
+  872|         for (let k = 0; k < a.feet.length; k++) {
+  873|           const f = a.feet[k];
+  874|           if (!prevSw[k] && !f.swinging) {
+  875|             const d = f.pos.distanceTo(prev[k]);
+  876|             if (d > worst) worst = d;
+  877|           }
+  878|           prev[k].copy(f.pos);
+  879|           prevSw[k] = f.swinging;
+  880|         }
+  881|       }
+  882|       out[sp] = {
+  883|         slip: Math.round(worst * 1e4) / 1e4,
+  884|         overstretch: a.overstretchFrames - over0,
+  885|         frames: steps,
+  886|         speed: Math.round((speedSum / steps) * 1e3) / 1e3,
+  887|         freq: Math.round((cycle / seconds) * 1e3) / 1e3,
+  888|       };
+  889|     }
+  890|     for (const h of home) h.a.place(h.p.x, h.p.z, h.h);
+  891|     this.brainEnabled = prevBrain;
+  892|     return out;
+  893|   }
+  894| 
+  895|   /**
+  896|    * v10 sign check. A sign is only called VERIFIED when the magnitude clears
+  897|    * 0.02 m AND the two signs give opposite deltas. Anything else is reported as
+  898|    * unverified rather than tie-broken.
+  899|    */
+  900|   signProbe(): Record<string, { pitch: number | null; roll: number | null; limb: number | null; wave: number | null; threshold: number; evidence: Record<string, string> }> {
+  901|     type Row = { pitch: number | null; roll: number | null; limb: number | null; wave: number | null; threshold: number; evidence: Record<string, string> };
+  902|     const out: Record<string, Row> = {};
+  903|     const prevBrain = this.brainEnabled;
+  904|     this.brainEnabled = false;
+  905|     for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) {
+  906|       const a = this.agents.find((x) => x.template.name.toUpperCase().startsWith(sp));
+  907|       if (!a) continue;
+  908|       for (const o of this.agents) { o.stop(); o.debugPose = 0; }
+  909|       a.place(0, -6, 0);
+  910|       const headBone = a.handle.bones[a.template.headBone];
+  911|       const bodyBone = a.handle.bones[a.template.bodyBone];
+  912|       const tipOf = (b: THREE.Object3D): THREE.Object3D => (b.children.length ? (b.children[0] as THREE.Object3D) : b);
+  913|       const tip = a.rig.arms.length ? tipOf(a.rig.arms[0]) : tipOf(a.rig.legs[0] ?? a.rig.body);
+  914|       const footBone = a.template.feet.length ? a.handle.bones[a.template.feet[0].chain[2]] : null;
+  915|       const height = a.template.height;
+  916|       const THRESH = 0.02 * height;
+  917|       // everything is measured in the BODY BONE's own frame (its parent space),
+  918|       // not world space: a body-pivot rotation then shows up as a real
+  919|       // displacement of the head relative to that pivot
+  920|       const inBodyFrame = (v: THREE.Vector3): THREE.Vector3 => {
+  921|         const parent = bodyBone.parent ?? bodyBone;
+  922|         const inv = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  923|         return v.applyQuaternion(inv);
+  924|       };
+  925|       const sample = () => {
+  926|         a.handle.group.updateMatrixWorld(true);
+  927|         return {
+  928|           h: inBodyFrame(headBone.getWorldPosition(new THREE.Vector3())),
+  929|           f: footBone ? inBodyFrame(footBone.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3(),
+  930|           w: inBodyFrame(tip.getWorldPosition(new THREE.Vector3())),
+  931|         };
+  932|       };
+  933|       const delta = (pose: number, ch: 'pitch' | 'roll' | 'limb' | 'wave', sign: number) => {
+  934|         a.debugPose = 0;
+  935|         (a.rig.axes as unknown as Record<string, number>)[ch] = sign;
+  936|         a.update(1 / 60);
+  937|         const b0 = sample();
+  938|         a.debugPose = pose;
+  939|         a.update(1 / 60);
+  940|         const b1 = sample();
+  941|         return {
+  942|           fwd: b1.h.z - b0.h.z,
+  943|           lat: b1.h.x - b0.h.x,
+  944|           ff: b1.f.z - b0.f.z,
+  945|           wy: b1.w.y - b0.w.y,
+  946|         };
+  947|       };
+  948|       const pass = (dp: number, dm: number): number | null => {
+  949|         const big = Math.max(Math.abs(dp), Math.abs(dm));
+  950|         if (big <= THRESH) return null;
+  951|         if ((dp > 0) === (dm > 0)) return null;
+  952|         return dp >= dm ? 1 : -1;
+  953|       };
+  954|       out[sp] = { pitch: null, roll: null, limb: null, wave: null, threshold: Math.round(THRESH * 1e4) / 1e4, evidence: {} };
+  955|       const run = (pose: number, ch: 'pitch' | 'roll' | 'limb' | 'wave', key: 'fwd' | 'lat' | 'ff' | 'wy') => {
+  956|         const dd = delta(pose, ch, 1);
+  957|         const plus = dd[key];
+  958|         const minus = delta(pose, ch, -1)[key];
+  959|         const chosen = pass(plus, minus);
+  960|         out[sp].evidence[ch] = chosen === null
+  961|           ? `UNVERIFIED  ${key}: +1 ${plus.toFixed(4)} / -1 ${minus.toFixed(4)} m  (threshold ${THRESH.toFixed(4)})`
+  962|           : `verified    ${key}: +1 ${plus.toFixed(4)} / -1 ${minus.toFixed(4)} m -> ${chosen > 0 ? '+1' : '-1'}`;
+  963|         if (chosen !== null) (a.rig.axes as unknown as Record<string, number>)[ch] = chosen;
+  964|         return chosen;
+  965|       };
+  966|       out[sp].pitch = run(1, 'pitch', 'fwd');
+  967|       out[sp].roll = run(2, 'roll', 'lat');
+  968|       out[sp].wave = run(4, 'wave', 'wy');
+  969|       // limb is an AXIS choice, so it is probed as one
+  970|       {
+  971|         const ax0 = a.rig.axes.limb;
+  972|         const tryAxis = (ax: 'x' | 'z'): number => {
+  973|           a.debugPose = 0; a.rig.axes.limb = ax; a.update(1 / 60);
+  974|           const b0 = sample(); a.debugPose = 3; a.update(1 / 60); const b1 = sample();
+  975|           return b1.f.z - b0.f.z;
+  976|         };
+  977|         const fx = tryAxis('x'), fz = tryAxis('z');
+  978|         const ok = Math.max(Math.abs(fx), Math.abs(fz)) > THRESH;
+  979|         a.rig.axes.limb = ok ? (Math.abs(fx) >= Math.abs(fz) ? 'x' : 'z') : ax0;
+  980|         out[sp].evidence.limb = ok
+  981|           ? `verified axis '${a.rig.axes.limb}': x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd`
+  982|           : `UNVERIFIED axis: x ${fx.toFixed(4)} / z ${fz.toFixed(4)} m fwd (threshold ${THRESH.toFixed(4)})`;
+  983|         out[sp].limb = ok ? (a.rig.axes.limb === 'x' ? 1 : 2) : null;
+  984|         a.debugPose = 0;
+  985|       }
+  986|     }
+  987|     this.brainEnabled = prevBrain;
+  988|     return out;
+  989|   }
+  990| 
+  991|   /**
+  992|    * v11 joint-rate probe: the worst angular rate per species, the BONE it lands
+  993|    * on, and the planting state of that leg at the peak frame, so a pop can be
+  994|    * attributed instead of guessed at.
+  995|    */
+  996|   jointProbe(seconds = 20, dt = 1 / 60): Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> {
+  997|     const out: Record<string, { rate: number; bone: string; frameType: string; wasForced: boolean }> = {};
+  998|     const prevBrain = this.brainEnabled;
+  999|     this.brainEnabled = true;
+ 1000|     const prev = new Map<number, { q: number[]; mode: string; forced: boolean }[]>();
