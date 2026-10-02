@@ -1,118 +1,147 @@
-  251|       if (this.goal) {
-  252|         const d = Math.hypot(this.goal.x - this.pos.x, this.goal.z - this.pos.z);
-  253|         if (d < ARRIVE) this.goal = null;
-  254|         else arrive(this.pos, this.goal, this.topSpeed * Math.max(0, this.throttle), SLOW_RADIUS, this.desired);
-  255|       }
-  256|       if (this.faceTarget) {
-  257|         const dx = this.faceTarget.x - this.pos.x;
-  258|         const dz = this.faceTarget.z - this.pos.z;
-  259|         if (Math.hypot(dx, dz) < 0.04) this.faceTarget = null;
-  260|         else {
-  261|           // turn in place: aim a slow creep at the target, and let the
-  262|           // heading spring in Locomotion do the turning
-  263|           const a = Math.atan2(dx, dz);
-  264|           this.desired.set(Math.sin(a) * 0.30, 0, Math.cos(a) * 0.30);
-  265|         }
-  266|       }
-  267|     }
-  268| 
-  269|     // v12: personal space. Creatures never walk into each other's bodies; an
-  270|     // overlapping neighbour adds a gentle push away to the desired velocity.
-  271|     if (!this.carried) {
-  272|       for (const o of this.world.nearby(this.pos, this.bulk * 2, this.id)) {
-  273|         const dx = this.pos.x - o.pos.x;
-  274|         const dz = this.pos.z - o.pos.z;
-  275|         const d = Math.hypot(dx, dz) || 1e-4;
-  276|         const minD = (this.bulk + o.bulk) * 0.42;
-  277|         if (d < minD) {
-  278|           const push = ((minD - d) / minD) * this.topSpeed * 0.6;
-  279|           this.desired.x += (dx / d) * push;
-  280|           this.desired.z += (dz / d) * push;
-  281|         }
-  282|       }
-  283|     }
-  284| 
-  285|     // ---- the 3-step pipeline ---------------------------------------------
-  286|     // the world-foot-planting solver needs the live gait numbers
-  287|     const loco = this.motion.loco;
-  288|     this.hero.drive.stride = loco.cfg.stride * (1 + 0.4 * loco.runT());
-  289|     this.hero.drive.speed = loco.speed;
-  290|     this.hero.drive.heading = loco.heading;
-  291|     this.hero.drive.groundY = heightAt;
-  292| 
-  293|     this.motion.preAnimate(dt, this.desired);
-  294|     this.hero.update(dt, null);
-  295|     this.motion.postAnimate(dt);
-  296|     this.applyDebugPose();
-  297| 
-  298|     // ---- v10: MOVE THE JUICE OFF THE PIVOT AND ONTO THE BODY --------------
-  299|     // The pivot sits BELOW the leg roots, so squashing it scaled the IK targets
-  300|     // with the body and the solver had to re-solve every frame — that was the
-  301|     // knee pop. The body bone sits ABOVE the leg roots, exactly like the
-  302|     // pedestal, so the juice no longer touches a planted foot.
-  303|     const pivot = this.rig.pivot;
-  304|     const body = this.rig.body;
-  305|     if (this.noPivotJuice) {
-  306|       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
-  307|     } else {
-  308|       body.position.set(body.position.x, this.restBodyY + pivot.position.y, body.position.z);
-  309|       body.scale.multiply(pivot.scale);
-  310|       // the WHOLE juice rotation moves to the body, not just the roll-over:
-  311|       // reading only rotation.z silently discarded every pitch the motion
-  312|       // layer applied, which is why the G-key pitch probe read 0.0000 m.
-  313|       if (pivot.quaternion.x || pivot.quaternion.y || pivot.quaternion.z) {
-  314|         body.quaternion.multiply(pivot.quaternion);
-  315|       }
-  316|       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
-  317|     }
-  318| 
-  319|     this.readFeet();
-  320|     this.tickEmote(dt);
-  321|   }
-  322| 
-  323|   private tickEmote(dt: number): void {
-  324|     if (this.emoteT > 0) {
-  325|       this.emoteT -= dt;
-  326|       if (this.emoteT <= 0) { this.emoteGlyph = null; this.emoteT = 0; }
-  327|     }
-  328|     this.wiggle = Math.max(0, this.wiggle - dt * 1.6);
-  329|   }
-  330| 
-  331|   /**
-  332|    * Read the REAL ankle bones back after the animator has solved them, so the
-  333|    * motion metrics measure the rendered rig and not a re-derivation of it.
-  334|    */
-  335|   private readFeet(): void {
-  336|     const t = this.template;
-  337|     const g = this.handle.group;
-  338|     g.updateMatrixWorld(true);
-  339|     const loco = this.motion.loco;
-  340|     for (let i = 0; i < this.feet.length; i++) {
-  341|       const f = this.feet[i];
-  342|       const bone = this.handle.bones[t.feet[i].chain[2]];
-  343|       const hipBone = this.handle.bones[t.feet[i].chain[0]];
-  344|       const kneeBone = this.handle.bones[t.feet[i].chain[1]];
-  345|       if (bone) bone.getWorldPosition(f.pos);
-  346|       // the stance/swing flag now comes from the real world-planting solver
-  347|       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
-  348|       const leg = legs?.find((l) => l.index === i);
-  349|       const swinging = leg ? leg.mode === 'swing' : false;
-  350|       f.swinging = swinging;
-  351|       f.swing = 0;
-  352|       if (!swinging && hipBone && kneeBone && bone) {
-  353|         const reach = (kneeBone.position.length() + bone.position.length()) * 0.95;
-  354|         const hw = hipBone.getWorldPosition(this._hip);
-  355|         if (hw.distanceTo(f.pos) > reach) this.overstretchFrames++;
-  356|       }
-  357|       // one dust puff per footfall, fired on the swing -> stance edge
-  358|       if (this.prevSwing[i] && !swinging && loco.speed > 0.1) {
-  359|         this.onFootfall?.(f.pos.x, f.pos.y, f.pos.z, 0.25 + loco.runT());
-  360|       }
-  361|       this.prevSwing[i] = swinging;
-  362|     }
-  363|   }
-  364| 
-  365|   emoteAnchor(out: THREE.Vector3): THREE.Vector3 {
-  366|     return out.copy(this.pos).setY(this.pos.y + this.template.height * this.dna.scale * 0.98);
-  367|   }
-  368| }
+  251|     this.actionAge += dt;
+  252| 
+  253|     // ---- the ONE thing this class decides: desired velocity ---------------
+  254|     this.desired.set(0, 0, 0);
+  255|     if (!this.carried) {
+  256|       if (this.goal) {
+  257|         const d = Math.hypot(this.goal.x - this.pos.x, this.goal.z - this.pos.z);
+  258|         if (d < ARRIVE) this.goal = null;
+  259|         else arrive(this.pos, this.goal, this.topSpeed * Math.max(0, this.throttle), SLOW_RADIUS, this.desired);
+  260|       }
+  261|       if (this.faceTarget) {
+  262|         const dx = this.faceTarget.x - this.pos.x;
+  263|         const dz = this.faceTarget.z - this.pos.z;
+  264|         if (Math.hypot(dx, dz) < 0.04) this.faceTarget = null;
+  265|         else {
+  266|           // turn in place: aim a slow creep at the target, and let the
+  267|           // heading spring in Locomotion do the turning
+  268|           const a = Math.atan2(dx, dz);
+  269|           this.desired.set(Math.sin(a) * 0.30, 0, Math.cos(a) * 0.30);
+  270|         }
+  271|       }
+  272|     }
+  273| 
+  274|     // v12: personal space. Creatures never walk into each other's bodies; an
+  275|     // overlapping neighbour adds a gentle push away to the desired velocity.
+  276|     if (!this.carried) {
+  277|       for (const o of this.world.nearby(this.pos, this.bulk * 2, this.id)) {
+  278|         const dx = this.pos.x - o.pos.x;
+  279|         const dz = this.pos.z - o.pos.z;
+  280|         const d = Math.hypot(dx, dz) || 1e-4;
+  281|         const minD = (this.bulk + o.bulk) * 0.42;
+  282|         if (d < minD) {
+  283|           const push = ((minD - d) / minD) * this.topSpeed * 0.6;
+  284|           this.desired.x += (dx / d) * push;
+  285|           this.desired.z += (dz / d) * push;
+  286|           // v12 hard resolve: steering alone loses to turn-first and to busy creatures
+  287|           const k = (minD - d) * 0.5 * Math.min(1, dt * 10);
+  288|           this.pos.x += (dx / d) * k;
+  289|           this.pos.z += (dz / d) * k;
+  290|         }
+  291|       }
+  292|     }
+  293| 
+  294|     // ---- the 3-step pipeline ---------------------------------------------
+  295|     // the world-foot-planting solver needs the live gait numbers
+  296|     const loco = this.motion.loco;
+  297|     this.hero.drive.stride = loco.cfg.stride * (1 + 0.4 * loco.runT());
+  298|     this.hero.drive.speed = loco.speed;
+  299|     this.hero.drive.heading = loco.heading;
+  300|     this.hero.drive.groundY = heightAt;
+  301| 
+  302|     this.motion.preAnimate(dt, this.desired);
+  303|     this.hero.update(dt, null);
+  304|     this.motion.postAnimate(dt);
+  305|     this.applyDebugPose();
+  306| 
+  307|     // ---- v10: MOVE THE JUICE OFF THE PIVOT AND ONTO THE BODY --------------
+  308|     // The pivot sits BELOW the leg roots, so squashing it scaled the IK targets
+  309|     // with the body and the solver had to re-solve every frame — that was the
+  310|     // knee pop. The body bone sits ABOVE the leg roots, exactly like the
+  311|     // pedestal, so the juice no longer touches a planted foot.
+  312|     const pivot = this.rig.pivot;
+  313|     const body = this.rig.body;
+  314|     if (this.noPivotJuice) {
+  315|       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
+  316|     } else {
+  317|       body.position.set(body.position.x, this.restBodyY + pivot.position.y, body.position.z);
+  318|       body.scale.multiply(pivot.scale);
+  319|       // the WHOLE juice rotation moves to the body, not just the roll-over:
+  320|       // reading only rotation.z silently discarded every pitch the motion
+  321|       // layer applied, which is why the G-key pitch probe read 0.0000 m.
+  322|       if (pivot.quaternion.x || pivot.quaternion.y || pivot.quaternion.z) {
+  323|         body.quaternion.multiply(pivot.quaternion);
+  324|       }
+  325|       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
+  326|     }
+  327| 
+  328|     // v12: legs solve LAST, against the final root / heading / body pose. Any
+  329|     // additive pose the motion layer put on a hip (kick, flail, G-probe) is
+  330|     // captured first and re-applied on top of the IK.
+  331|     const hips = this.hero.legHips();
+  332|     const rl = this.rig.legs;
+  333|     for (let i = 0; i < rl.length; i++) {
+  334|       if (!hips.has(rl[i]) || !this.legRest[i]) continue;
+  335|       this.legDelta[i] = (this.legDelta[i] ?? new THREE.Quaternion()).copy(this.legRest[i]).invert().multiply(rl[i].quaternion);
+  336|     }
+  337|     const free = this.carried || this.motion.dangle.active || this.motion.dangle.airborne;
+  338|     this.hero.solveWorldLegs(dt, free);
+  339|     if (!free) {
+  340|       for (let i = 0; i < rl.length; i++) {
+  341|         const dq = this.legDelta[i];
+  342|         if (dq && hips.has(rl[i]) && Math.abs(dq.w) < 0.999999) rl[i].quaternion.multiply(dq);
+  343|       }
+  344|     }
+  345| 
+  346|     this.readFeet();
+  347|     this.tickEmote(dt);
+  348|   }
+  349| 
+  350|   private tickEmote(dt: number): void {
+  351|     if (this.emoteT > 0) {
+  352|       this.emoteT -= dt;
+  353|       if (this.emoteT <= 0) { this.emoteGlyph = null; this.emoteT = 0; }
+  354|     }
+  355|     this.wiggle = Math.max(0, this.wiggle - dt * 1.6);
+  356|   }
+  357| 
+  358|   /**
+  359|    * Read the REAL ankle bones back after the animator has solved them, so the
+  360|    * motion metrics measure the rendered rig and not a re-derivation of it.
+  361|    */
+  362|   private readFeet(): void {
+  363|     const t = this.template;
+  364|     const g = this.handle.group;
+  365|     g.updateMatrixWorld(true);
+  366|     const loco = this.motion.loco;
+  367|     for (let i = 0; i < this.feet.length; i++) {
+  368|       const f = this.feet[i];
+  369|       const bone = this.handle.bones[t.feet[i].chain[2]];
+  370|       const hipBone = this.handle.bones[t.feet[i].chain[0]];
+  371|       const kneeBone = this.handle.bones[t.feet[i].chain[1]];
+  372|       if (bone) bone.getWorldPosition(f.pos);
+  373|       // the stance/swing flag now comes from the real world-planting solver
+  374|       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
+  375|       const leg = legs?.find((l) => l.index === i);
+  376|       const swinging = leg ? leg.mode === 'swing' : false;
+  377|       f.swinging = swinging;
+  378|       f.swing = 0;
+  379|       if (!swinging && hipBone && kneeBone && bone) {
+  380|         // v12: live world-space segment lengths; overstretch = leg locked straight
+  381|         const hw = hipBone.getWorldPosition(this._hip);
+  382|         const kw = kneeBone.getWorldPosition(this._kneeW);
+  383|         const reach = (hw.distanceTo(kw) + kw.distanceTo(f.pos)) * 0.98;
+  384|         if (hw.distanceTo(f.pos) > reach) this.overstretchFrames++;
+  385|       }
+  386|       // one dust puff per footfall, fired on the swing -> stance edge
+  387|       if (this.prevSwing[i] && !swinging && loco.speed > 0.1) {
+  388|         this.onFootfall?.(f.pos.x, f.pos.y, f.pos.z, 0.25 + loco.runT());
+  389|       }
+  390|       this.prevSwing[i] = swinging;
+  391|     }
+  392|   }
+  393| 
+  394|   emoteAnchor(out: THREE.Vector3): THREE.Vector3 {
+  395|     return out.copy(this.pos).setY(this.pos.y + this.template.height * this.dna.scale * 0.98);
+  396|   }
+  397| }
