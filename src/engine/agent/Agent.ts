@@ -91,6 +91,8 @@ export class Agent implements HashEntry {
   private legRest: THREE.Quaternion[] = [];
   private legDelta: (THREE.Quaternion | undefined)[] = [];
   private static NEXT_ID = 1;
+  /** v17 profiler: total ms spent in the world leg solve */
+  static legMs = 0;
 
   constructor(world: World, template: HeroTemplate, dna: HeroDNA, handle: HeroHandle, seed: number) {
     this.id = Agent.NEXT_ID++;
@@ -345,7 +347,9 @@ export class Agent implements HashEntry {
       this.legDelta[i] = (this.legDelta[i] ?? new THREE.Quaternion()).copy(this.legRest[i]).invert().multiply(rl[i].quaternion);
     }
     const free = this.carried || this.rolled || this.hopping || this.motion.dangle.active || this.motion.dangle.airborne;
+    const tl = performance.now();
     this.hero.solveWorldLegs(dt, free);
+    Agent.legMs += performance.now() - tl;
     this.kicking.clear();
     if (!free) {
       for (let i = 0; i < rl.length; i++) {

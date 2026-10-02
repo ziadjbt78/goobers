@@ -149,3 +149,9 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - save.ts: autosave 15 s + on unload, restore on boot, ?fresh skips, Shift+N new island; off under webdriver.
 - Sim: spawn(hero, at, quiet, dna?, seed?), saveState/loadState/heroIdOf; brain LOD (>16 u from camera thinks every 3rd step).
 - watch: SAVE/LOAD + SIM COST sections and gates.
+
+
+## v17 (2026-10-02 13:49): Batch 6, audio + foundation fixes
+- audio.ts: procedural WebAudio (footsteps by size, mood voices, tool SFX, wind/birds/crickets), Shift+M mute.
+- Save reload restores exact position/heading. Clamped planted foot = lifted (airborne).
+- watch: gates on WALK only (actions = WARN), BODY snap forensics, sim profiler breakdown, linear-scaling gate.

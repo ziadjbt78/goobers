@@ -29,6 +29,7 @@ import { World } from './World';
 import { buildTerrain, buildSea, buildFoam, heightAt, isDry, WALK_R } from './terrain';
 import { readSave, writeSave, clearSave, type SaveFile } from './save';
 import { BUILD_LABEL } from '../core/build';
+import { Sfx } from './audio';
 
 export type Tool = 'none' | 'spawn' | 'call' | 'feed' | 'ball' | 'pet' | 'carry' | 'inspect';
 
@@ -53,6 +54,12 @@ export class Sim {
   readonly agents: Agent[] = [];
   readonly brains = new Map<number, Brain>();
   readonly events: SimEvent[] = [];
+  /** v17: procedural audio */
+  readonly sfx = new Sfx();
+  /** v17 profiler (ms, accumulated; watch.mjs resets it) */
+  prof = { brain: 0, agent: 0 };
+  private _cd = new THREE.Vector3();
+  private camDist(x: number, y: number, z: number): number { return this.stage.camera.position.distanceTo(this._cd.set(x, y, z)); }
   tool: Tool = 'none';
   spawnSpecies: HeroId | null = null;
   selected: Agent | null = null;
@@ -177,6 +184,11 @@ export class Sim {
     for (const c of f.creatures) {
       try {
         const a = this.spawn(c.hero, new THREE.Vector3(c.x, heightAt(c.x, c.z), c.z), true, c.dna, c.seed);
+        // v17: exact restore (place() re-rolls spots in shallows / past the walk edge)
+        a.pos.set(c.x, heightAt(c.x, c.z), c.z);
+        a.heading = c.h;
+        a.rig.root.position.copy(a.pos);
+        a.rig.root.rotation.set(0, c.h, 0);
         const b = this.brains.get(a.id);
         if (b && c.needs) Object.assign(b.needs as unknown as Record<string, number>, c.needs);
       } catch { /* skip one bad record, keep the rest */ }
@@ -217,6 +229,7 @@ export class Sim {
     this.saveTimer += dt;
     if (this.saveTimer > 15) { this.saveTimer = 0; this.autosave(); }
     this.world.update(dt);
+    this.sfx.ambient(dt, this.stage.day);
     if (this.dayFrozen) {
       this.world.day = this.frozenDay;
       this.world.stage.setDayNight(this.frozenDay);
@@ -232,12 +245,16 @@ export class Sim {
       if (b && this.brainEnabled && ov <= 0) {
         const bdt = this.brainDt(a, dt);
         if (bdt > 0) {
+          const tb = performance.now();
           b.update(bdt, a, this.world);
+          this.prof.brain += performance.now() - tb;
           const want = ANIM_ACTION[b.action] ?? 'none';
           if (a.action !== want && a.action !== 'petRoll' && a.action !== 'chomp' && a.action !== 'wave') a.begin(want);
         }
       }
+      const ta = performance.now();
       a.update(dt);
+      this.prof.agent += performance.now() - ta;
     }
 
     // ---- petting: the motion layer owns the pose, its roll-over at 2 s and
@@ -323,6 +340,8 @@ export class Sim {
 
   private pushEvent(kind: string, a: Agent): void {
     this.events.push({ t: +this.simTime.toFixed(2), kind, name: a.name });
+    if (a && a.pos) this.sfx.event(kind, a.mood, a.bulk, this.camDist(a.pos.x, a.pos.y, a.pos.z), a.id);
+    else this.sfx.event(kind, 'neutral', 1, 0, 0);
     if (this.events.length > 400) this.events.shift();
   }
 
@@ -332,7 +351,10 @@ export class Sim {
       if (!b) continue;
       while (b.events.length) {
         const e = b.events.shift();
-        if (e) this.events.push({ t: +this.simTime.toFixed(2), kind: e.kind, name: e.name });
+        if (e) {
+          this.events.push({ t: +this.simTime.toFixed(2), kind: e.kind, name: e.name });
+          this.sfx.voice(a.mood, a.bulk, this.camDist(a.pos.x, a.pos.y, a.pos.z), a.id);
+        }
       }
     }
   }
@@ -353,7 +375,7 @@ export class Sim {
     this.seedOf.set(agent.id, agentSeed);
     const p = at ?? this.world.randomSpot(this.rng);
     agent.place(p.x, p.z);
-    agent.onFootfall = (x, y, z, power) => this.vfx.dust(x, y, z, power);
+    agent.onFootfall = (x, y, z, power) => { this.vfx.dust(x, y, z, power); this.sfx.footstep(power, agent.bulk, this.camDist(x, y, z)); };
     agent.onVfx = (kind, x, y, z, scale) => this.motionVfx(kind, x, y, z, scale);
     this.stage.scene.add(handle.group);
     this.agents.push(agent);

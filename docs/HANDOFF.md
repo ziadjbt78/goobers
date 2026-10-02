@@ -54,18 +54,17 @@ Direct answers, no filler. English only.
 ## Status
 | Batch | Scope | State |
 |---|---|---|
-| infra | repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces + SEND THIS line) | DONE |
+| infra | repo, ship.sh, watch.sh, dump.sh (+ SEND THIS line) | DONE |
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1-4 (v12-v15) | legs solve last, stepper, crouch, closed-loop IK, free legs, body-space pole, crowd resolve | walk clean, overlap 0, action pops remain |
-| 5 (v16) | vertical-lift clamp, save/load (save.ts), brain LOD, save + sim-cost gates | SHIPPED 2026-10-02 13:40, awaiting report |
+| 1-5 (v12-v16) | locomotion rebuild (solve order, stepper, crouch, closed-loop IK, free legs, vertical lift), crowd, save/load, brain LOD | walk DONE (ZIK pass; PIP/MOCHI slips are action-only) |
+| 6 (v17) | procedural audio, exact save reload, walk-only gates, body-snap forensics, sim profiler | SHIPPED 2026-10-02 13:49, awaiting report |
 
-## Last results (v15 watch 6edacb3)
-Leg joint 38 / 35 / 40 rad/s (was 63-94). Avg slip 0.88 / 0.56 / 0.29 cm. Slides >1 cm 30 / 20 / 4.4 % of steps,
-96-100% inside actions, one-frame pops: planted lock out of reach -> sideways clamp. Fixed in v16 by vertical lift.
+## Last results (v16 watch 6dcf583)
+ZIK slip PASS. PIP/MOCHI slips 100% in actions (one-frame, clamp). Body bone 91 rad/s in actions (choreo snap).
+Save reload not identical (place() re-rolled spots). Headless sim 0.55 ms/creature (no profile yet).
 
 ## Next
-1. Read v16 gates. If walk gates pass or are near, locomotion is DONE: stop locomotion work.
-2. Batch 6 FOUNDATION part 2: read Sim_00..04 fully, move tools (call/feed/ball/pet/carry/inspect + choreo) to
-   src/engine/world/systems/Tools.ts and probes to tools/Probes.ts as plain functions taking Sim;
-   Sim keeps lifecycle + step. Add render LOD (far creatures: no outline, no blush/glint) + fps gate.
-3. Batch 7+: visual pass (tone map, shadows, bloom, grading, wind grass, water) per ROADMAP + NORTH STAR.
+1. Read v17 report: walk gates, BODY snap action name, sim breakdown, save/load.
+2. Batch 7: fix the named body-snap action (blend in/out), optimise the biggest profiler bucket,
+   render LOD (far creatures drop outline/glints), then Sim.ts split (read Sim_00..04 fully first).
+3. Batch 8+: visual pass (soft shadows/contact shadows, bloom, grading, wind grass, water), faces, tools juice -> vertical slice.

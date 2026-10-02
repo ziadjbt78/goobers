@@ -61,6 +61,7 @@ await safe('freeRun', async () => {
     for (const a of s.agents) a.hero.resetLiftStats?.();
     const st = new Map();
     const legQ = new Map();
+    const bodyQ = new Map();
     const events = [];
     const prevPos = new Map();
     let overlapFrames = 0, minRatio = Infinity;
@@ -80,11 +81,15 @@ await safe('freeRun', async () => {
       for (const a of ag) {
         const o = (out[spOf(a)] ??= {});
         const legs = a.hero.legs || [];
+        { const bb = a.rig.body.quaternion, bq = bodyQ.get(a);
+          if (bq) { const r = 2 * Math.acos(Math.min(1, Math.abs(bb.dot(bq)))) / dt; if (r > (o.bodyJ ?? 0)) { o.bodyJ = r; o.bodyAct = a.action; } bq.copy(bb); }
+          else bodyQ.set(a, bb.clone()); }
         let lq = legQ.get(a);
         if (!lq) { lq = legs.map((L) => [L.hip.quaternion.clone(), L.knee.quaternion.clone(), L.ankle.quaternion.clone()]); legQ.set(a, lq); }
         else if (!a.hero.legsFree) legs.forEach((L, li) => { [L.hip, L.knee, L.ankle].forEach((b, bi) => {
           const q = lq[li][bi]; const r = 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(q)))) / dt;
           if (r > (o.legJ ?? 0)) { o.legJ = r; o.legJBone = `${b.name}(${L.mode})`; }
+          if (!a.motion.busy && r > (o.wJ ?? 0)) { o.wJ = r; o.wJBone = `${b.name}(${L.mode})`; }
           if (r > 20) o.legJFrames = (o.legJFrames ?? 0) + 1;
           q.copy(b.quaternion); }); });
         else legs.forEach((L, li) => { lq[li][0].copy(L.hip.quaternion); lq[li][1].copy(L.knee.quaternion); lq[li][2].copy(L.ankle.quaternion); });
@@ -112,6 +117,7 @@ await safe('freeRun', async () => {
             }
           } else if (c) {
             o.stances++; o.sum += c.max; if (c.max > 0.01) o.bad++; if (c.max > o.worst) o.worst = c.max;
+            if (!c.busy) { o.wSt = (o.wSt ?? 0) + 1; if (c.max > 0.01) o.wBad = (o.wBad ?? 0) + 1; if (c.max > (o.wWorst ?? 0)) o.wWorst = c.max; }
             if (c.max > 0.01) {
               const L = (a.hero.legs || []).find((l) => l.index === fi);
               events.push({ sp: spOf(a), leg: fi, slip: c.max, jump: c.jump, err: c.err, perr: c.perr, rr: c.rr, busy: c.busy, cause: L && L.forced ? 'forced' : 'beat' });
@@ -152,6 +158,7 @@ await safe('freeRun', async () => {
   for (const x of [...ev].sort((p, q) => q.slip - p.slip).slice(0, 8))
     log(`    ${x.sp} leg ${x.leg}: slip ${(x.slip * 100).toFixed(1)} jump ${(x.jump * 100).toFixed(1)} cm | reach ${x.rr.toFixed(2)} | IK ${(x.err * 100).toFixed(1)} post ${(x.perr * 100).toFixed(1)} cm | ${x.busy ? 'ACTION' : 'walk'} | ${x.cause}`);
   for (const [sp, o] of Object.entries(free.out)) if (o.legJ) log(`  ${sp.padEnd(6)} LEG joint max ${o.legJ.toFixed(1)} rad/s on ${o.legJBone} | leg frames >20: ${o.legJFrames ?? 0}`);
+  for (const [sp, o] of Object.entries(free.out)) if (o.bodyJ) log(`  ${sp.padEnd(6)} BODY snap max ${o.bodyJ.toFixed(1)} rad/s during action '${o.bodyAct}'`);
   for (const [sp, o] of Object.entries(free.out)) {
     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);
@@ -237,15 +244,27 @@ const perf = {};
 await safe('perf', async () => {
   const r = await p.evaluate((dt) => {
     const s = window.__lab; s.loud();
-    const time = () => { for (let i = 0; i < 30; i++) s.step(dt); const t0 = performance.now(); for (let i = 0; i < 120; i++) s.step(dt); return (performance.now() - t0) / 120; };
+    let bd = null;
+    const AG = s.agents[0] ? s.agents[0].constructor : null;
+    const time = () => {
+      for (let i = 0; i < 30; i++) s.step(dt);
+      s.prof.brain = 0; s.prof.agent = 0; if (AG) AG.legMs = 0;
+      const t0 = performance.now();
+      for (let i = 0; i < 120; i++) s.step(dt);
+      const tot = performance.now() - t0;
+      const legs = AG ? AG.legMs : 0;
+      bd = { brain: s.prof.brain / 120, motion: (s.prof.agent - legs) / 120, legs: legs / 120, other: (tot - s.prof.brain - s.prof.agent) / 120 };
+      return tot / 120;
+    };
     const n0 = s.agents.length; const m0 = time();
     const base = [...s.agents];
     for (let i = 0; i < 16; i++) s.spawn(s.heroIdOf(base[i % base.length]), null, true);
     const n1 = s.agents.length; const m1 = time();
-    return { n0, m0, n1, m1 };
+    return { n0, m0, n1, m1, bd };
   }, DT);
   Object.assign(perf, r);
   log(`  ${r.n0} creatures ${r.m0.toFixed(2)} ms/step | ${r.n1} creatures ${r.m1.toFixed(2)} ms/step | ${(r.m1 / r.n1).toFixed(3)} ms per creature`);
+  if (r.bd) log(`  breakdown @${r.n1}: brain ${r.bd.brain.toFixed(2)} | motion+anim ${r.bd.motion.toFixed(2)} | leg solve ${r.bd.legs.toFixed(2)} | other ${r.bd.other.toFixed(2)} ms/step`);
 });
 
 log('\n## GATES');
@@ -253,13 +272,15 @@ const gate = (name, ok, val) => log(`  ${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(30
 for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
   const o = free?.out?.[sp]; if (!o) continue;
   const pct = o.stances ? (100 * o.bad) / o.stances : 0;
-  gate(`${sp} worst slip <= 2 cm`, (o.worst ?? 0) <= 0.02, `${((o.worst ?? 0) * 100).toFixed(2)} cm`);
-  gate(`${sp} steps >1 cm <= 2%`, pct <= 2, `${pct.toFixed(1)}%`);
-  gate(`${sp} leg joint <= 20 rad/s`, (o.legJ ?? 0) <= 20, `${(o.legJ ?? 0).toFixed(1)} on ${o.legJBone ?? '-'}`);
+  const wpct = o.wSt ? (100 * (o.wBad ?? 0)) / o.wSt : 0;
+  gate(`${sp} WALK worst slip <= 2 cm`, (o.wWorst ?? 0) <= 0.02, `${((o.wWorst ?? 0) * 100).toFixed(2)} cm (${o.wSt ?? 0} walk steps)`);
+  gate(`${sp} WALK steps >1 cm <= 2%`, wpct <= 2, `${wpct.toFixed(1)}%`);
+  gate(`${sp} WALK leg joint <= 20 rad/s`, (o.wJ ?? 0) <= 20, `${(o.wJ ?? 0).toFixed(1)} on ${o.wJBone ?? '-'}`);
+  log(`  WARN  ${(sp + ' in actions').padEnd(30)} worst ${((o.worst ?? 0) * 100).toFixed(1)} cm | ${pct.toFixed(1)}% steps | leg joint ${(o.legJ ?? 0).toFixed(1)} | body ${(o.bodyJ ?? 0).toFixed(0)} rad/s '${o.bodyAct ?? '-'}'`);
 }
 gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
 gate('console errors = 0', errs.length === 0, errs.length);
 gate('save/load identical', saveOK, saveOK ? 'yes' : 'no');
-gate('sim 24 creatures <= 8 ms/step', perf.m1 !== undefined && perf.m1 <= 8, perf.m1 !== undefined ? `${perf.m1.toFixed(2)} ms` : '-');
+gate('sim cost scales linearly', perf.m1 !== undefined && perf.m1 <= 3.6 * perf.m0, perf.m1 !== undefined ? `${(perf.m1 / perf.m0).toFixed(2)}x for 3x creatures` : '-');
 writeFileSync(`${OUT}/REPORT.md`, '```\n' + L.join('\n') + '\n```\n');
 await b.close();

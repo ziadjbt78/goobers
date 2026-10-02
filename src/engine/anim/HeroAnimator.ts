@@ -827,6 +827,7 @@ export class HeroAnimator {
       // v16: a planted foot the body has risen away from lifts STRAIGHT UP on its
       // lock (keeps x/z) instead of being dragged sideways toward the hip
       L.lifted = false;
+      this._lk.copy(this._ft);
       if (L.mode === 'plant' && !L.landPending) {
         const dxz = Math.hypot(this._ft.x - hip.x, this._ft.z - hip.z);
         if (dxz < rMax) {
@@ -835,6 +836,8 @@ export class HeroAnimator {
         }
       }
       this._clampReach(this._ft, hip, rMax);
+      // v17: clamped along hip->lock = raised off the ground, not sliding on it
+      if (L.mode === 'plant' && !L.landPending && this._ft.distanceTo(this._lk) > 0.01) L.lifted = true;
       this._goal.copy(this._ft);
       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
@@ -880,6 +883,7 @@ export class HeroAnimator {
 
   private _hw2 = new THREE.Vector3();
   private _goal = new THREE.Vector3();
+  private _lk = new THREE.Vector3();
   private _sc = new THREE.Vector3();
 
   /**
