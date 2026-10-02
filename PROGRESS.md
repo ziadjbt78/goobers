@@ -122,3 +122,10 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - Stepper: edge-triggered lifts, live world-space reach, predictive re-aimed landing, lock-where-landed, airborne-count limits; angle guard removed.
 - Additive hip poses (kick/flail/G-probe) preserved over IK. Hard crowd separation. Overstretch counter uses world lengths.
 - Pedestal path verbatim (moved into _solveLegsPedestal).
+
+
+## v13 (2026-10-02 09:19): Batch 2, Locomotion v2
+- Crouch: skeleton root drops so every hip sits within 0.92 (standing) to 0.80 (moving) of its live leg reach; absorbs the bob.
+- Closed-loop IK: up to 3 re-aims on measured ankle error (squash shear), targets clamped to 98.5% reach.
+- Strain lift (planted miss > 1 cm), planted rate cap 40 rad/s, rolled-over = feet free.
+- watch: lift-cause breakdown, IK miss, crouch; watch.sh no longer deletes dump pieces.

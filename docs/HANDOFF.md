@@ -5,8 +5,8 @@ Goal: premium stylized creature sim/game in the browser (Vite + TS + Three.js + 
 ## How we work (agreed pipeline)
 1. Claude writes ONE large batch as a single bash + python block. It is atomic: every
    patch target is checked first and NO file is written unless all of them match.
-2. Ziad pastes it. The block ends with: ./ship.sh "msg" && ./dump.sh && ./watch.sh
-3. Ziad sends back ONLY the line "WATCH SHA: <sha>".
+2. Ziad pastes it. The block ends with: ./ship.sh "msg" && ./watch.sh && ./dump.sh
+3. Ziad sends back ONLY the last line "DUMP SHA: <sha>" (that commit holds report + source pieces).
 4. Claude reads, at that SHA:
    - watch/REPORT.md : automated headless playtest (slip, joint rate, overlap, errors, GATES)
    - watch/src/*.txt : big source files split into 250-line numbered pieces (full code)
@@ -39,15 +39,16 @@ Direct answers, no filler. English only.
 | Batch | Scope | State |
 |---|---|---|
 | infra | GitHub repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces) | DONE |
-| fixes | dust-ring fade, sim substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1 | World locomotion: legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, live world reach, lock-where-landed, crowd hard-resolve, watch GATES, docs/ROADMAP.md, build v12 | SHIPPED, waiting for watch gates |
+| fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
+| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve, gates | SHIPPED: overlap fixed (0), slip/joint gates FAIL |
+| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap, lift-cause diagnostics | SHIPPED 2026-10-02 09:19, awaiting gates |
 
-## Last results (watch f749997, before Batch 1)
-Feet slide on PIP/MOCHI/ZIK (worst 16-22 cm), knees snap (84-118 rad/s), overlap 87/900 frames, 0 errors, pedestal PASS.
-Root cause: World IK solved BEFORE postAnimate moved the root and Agent applied body juice.
+## Last results (v12 watch e8fa96d)
+Overlap 0, errors 0, pedestal PASS. Slip worst PIP 22 / MOCHI 32 / ZIK 9.5 cm (35-56% of steps > 1 cm).
+Joint PIP 188 hip_r, MOCHI 127 knee_br, ZIK 82 knee_mid_r rad/s. Overstretch MOCHI 388/480 frames.
+Diagnosis: hips sit ~full leg length above ground (plus bob) -> no stance room; squash shears IK aim; straight legs flip branch.
 
 ## Next
-1. Confirm Batch 1 gates. Fold any remaining failures into Batch 2.
-2. Batch 2 (Foundation): split Sim.ts (~47 KB) into systems, save/load, seeded world,
-   distance LOD (far creatures tick slower, no IK), perf gate 60 fps @ 12.
-3. Then Batches 3-6 per docs/ROADMAP.md, ending at the vertical slice.
+1. Read v13 gates + lift-cause line. If slip still fails, the lift causes say which guard is wrong.
+2. Foundation batch: split Sim.ts (~47 KB) into systems, save/load, seeded world, distance LOD, perf gate 60 fps @ 12.
+3. Then visual / feel / tools / slice batches per docs/ROADMAP.md.

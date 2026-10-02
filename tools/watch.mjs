@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 const BASE = process.argv[2] ?? 'http://127.0.0.1:8137/';
 const OUT = 'watch';
 const DT = 1 / 30;
-rmSync(OUT, { recursive: true, force: true });
+for (const f of ['REPORT.md', 'frames']) rmSync(`${OUT}/${f}`, { recursive: true, force: true });
 mkdirSync(`${OUT}/frames`, { recursive: true });
 
 const L = [];
@@ -58,6 +58,7 @@ await safe('freeRun', async () => {
     const spOf = (a) => a.template.name.split(' ')[0].toUpperCase();
     const cmp = s.constructor.compare;
     const out = {};
+    for (const a of s.agents) a.hero.resetLiftStats?.();
     const st = new Map();
     const prevPos = new Map();
     let overlapFrames = 0, minRatio = Infinity;
@@ -103,9 +104,17 @@ await safe('freeRun', async () => {
       }
       if (hit) overlapFrames++;
     }
-    return { out, overlapFrames, minRatio, steps, count: s.agents.length };
+    const lifts = {};
+    for (const a of s.agents) {
+      const L = a.hero.liftStats; if (!L) continue;
+      const o = (lifts[spOf(a)] ??= { beat: 0, hard: 0, strain: 0, soft: 0, err: 0, crouch: 0, n: 0 });
+      o.beat += L.beat; o.hard += L.hard; o.strain += L.strain; o.soft += L.soft;
+      o.err = Math.max(o.err, L.maxErr); o.crouch += a.hero.crouch ?? 0; o.n++;
+    }
+    return { out, overlapFrames, minRatio, steps, count: s.agents.length, lifts };
   }, { dt: DT, steps: 900 });
   log(`  creatures ${free.count} | overlap frames ${free.overlapFrames}/${free.steps} | closest pair ${free.minRatio.toFixed(2)}x personal space`);
+  for (const [sp, l] of Object.entries(free.lifts ?? {})) log(`  ${sp.padEnd(6)} lifts: beat ${l.beat} reach ${l.hard} strain ${l.strain} catch-up ${l.soft} | max planted IK miss ${(l.err * 100).toFixed(2)} cm | crouch ${(100 * l.crouch / Math.max(1, l.n)).toFixed(1)} cm`);
   for (const [sp, o] of Object.entries(free.out)) {
     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);

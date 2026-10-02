@@ -228,6 +228,8 @@ export class Agent implements HashEntry {
   /** v9 diagnostic: strip the pivot's juice so the slip it causes can be
    *  separated from slip caused by a wrong stride. */
   noPivotJuice = false;
+  /** v13: body rolled over (pet-roll etc.): feet do not plant */
+  rolled = false;
   /** frames (per probe) where a PLANTED foot was past 95% of leg reach */
   overstretchFrames = 0;
   private restBodyY = 0;
@@ -319,6 +321,7 @@ export class Agent implements HashEntry {
       // the WHOLE juice rotation moves to the body, not just the roll-over:
       // reading only rotation.z silently discarded every pitch the motion
       // layer applied, which is why the G-key pitch probe read 0.0000 m.
+      this.rolled = 2 * Math.acos(Math.min(1, Math.abs(pivot.quaternion.w))) > 0.6;
       if (pivot.quaternion.x || pivot.quaternion.y || pivot.quaternion.z) {
         body.quaternion.multiply(pivot.quaternion);
       }
@@ -334,7 +337,7 @@ export class Agent implements HashEntry {
       if (!hips.has(rl[i]) || !this.legRest[i]) continue;
       this.legDelta[i] = (this.legDelta[i] ?? new THREE.Quaternion()).copy(this.legRest[i]).invert().multiply(rl[i].quaternion);
     }
-    const free = this.carried || this.motion.dangle.active || this.motion.dangle.airborne;
+    const free = this.carried || this.rolled || this.motion.dangle.active || this.motion.dangle.airborne;
     this.hero.solveWorldLegs(dt, free);
     if (!free) {
       for (let i = 0; i < rl.length; i++) {
