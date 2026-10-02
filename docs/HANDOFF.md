@@ -6,7 +6,8 @@ Goal: premium stylized creature sim/game in the browser (Vite + TS + Three.js + 
 1. Claude writes ONE large batch as a single bash + python block. It is atomic: every
    patch target is checked first and NO file is written unless all of them match.
 2. Ziad pastes it. The block ends with: ./ship.sh "msg" && ./watch.sh && ./dump.sh
-3. Ziad sends back ONLY the last line "DUMP SHA: <sha>" (that commit holds report + source pieces).
+3. Ziad sends back ONLY the last printed line: "SEND THIS: Repo ziadjbt78/goobers, read docs/HANDOFF.md, SHA <sha>".
+   Same message in a new chat or the same chat. That SHA holds code + REPORT.md + source pieces.
 4. Claude reads, at that SHA:
    - watch/REPORT.md : automated headless playtest (slip, joint rate, overlap, errors, GATES)
    - watch/src/*.txt : big source files split into 250-line numbered pieces (full code)

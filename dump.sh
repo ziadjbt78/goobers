@@ -13,4 +13,5 @@ ls watch/src | sed 's/^/  /'
 git add dump.sh watch/src
 git commit -q -m "dump: source pieces for review" || true
 git push -q
-echo "DUMP SHA: $(git rev-parse HEAD)"
+echo ""
+echo "SEND THIS: Repo ziadjbt78/goobers, read docs/HANDOFF.md, SHA $(git rev-parse HEAD)"
