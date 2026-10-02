@@ -10,15 +10,23 @@
  *
  * v19 EXACT path (World): the whole solve runs in the hip parent's OWN space,
  * squash included, and every aim is a minimal arc from the bone's rest
- * direction. That removes the world-frame twist (heading-dependent flips on
- * splayed legs, phantom knee rates) and the squash-shear ankle miss. The
- * legacy path (pedestal / Heroes) is untouched.
+ * direction. That removes the world-frame twist and the squash-shear ankle miss.
+ *
+ * v20 SWIVEL LIMIT (World): the knee may rotate about the hip->foot line at most
+ * `maxSwivel` per call relative to `swivelFrom`. Rotating about that line keeps
+ * both segment lengths, so the foot stays EXACTLY on target and the bend is
+ * unchanged: smooth knees without any foot slip.
+ *
+ * The legacy path (pedestal / Heroes) is untouched.
  */
 import * as THREE from 'three';
 import { solveIK2, ikLast } from './ik';
 
 /** The conventional "down" limb axis, kept for callers that use it as a hint. */
 export const LIMB_AXIS = new THREE.Vector3(0, -1, 0);
+
+/** v20: did the LAST exact solve clamp the knee swivel? (forensics) */
+export const legLast = { swivel: false };
 
 const _q = new THREE.Quaternion();
 const _inv = new THREE.Quaternion();
@@ -77,6 +85,10 @@ export interface LegSolveInput {
   exact?: boolean;
   /** v19: world rotation the foot holds (creature heading). Default: world identity. */
   footWorld?: THREE.Quaternion;
+  /** v20: reference knee (hip-parent space) the swivel is limited against */
+  swivelFrom?: THREE.Vector3;
+  /** v20: max knee swivel about hip->foot, radians, for this call */
+  maxSwivel?: number;
 }
 
 const _xq = new THREE.Quaternion();
@@ -88,8 +100,33 @@ const _xp = new THREE.Vector3();
 const _xk = new THREE.Vector3();
 const _xu = new THREE.Vector3();
 const _xd = new THREE.Vector3();
+const _sa = new THREE.Vector3();
+const _s0 = new THREE.Vector3();
+const _s1 = new THREE.Vector3();
+const _s2 = new THREE.Vector3();
+const _sq = new THREE.Quaternion();
+
+/** Rotate `knee` about the root->target line so it is at most `maxA` from `ref`. */
+function limitSwivel(root: THREE.Vector3, target: THREE.Vector3, knee: THREE.Vector3, ref: THREE.Vector3, maxA: number): boolean {
+  _sa.copy(target).sub(root);
+  const len = _sa.length();
+  if (len < 1e-6) return false;
+  _sa.multiplyScalar(1 / len);
+  _s0.copy(ref).sub(root);
+  _s0.addScaledVector(_sa, -_s0.dot(_sa));
+  _s1.copy(knee).sub(root);
+  _s1.addScaledVector(_sa, -_s1.dot(_sa));
+  if (_s0.lengthSq() < 1e-12 || _s1.lengthSq() < 1e-12) return false;
+  const ang = Math.atan2(_s2.crossVectors(_s0, _s1).dot(_sa), _s0.dot(_s1));
+  const over = Math.abs(ang) - Math.max(0, maxA);
+  if (over <= 0) return false;
+  _sq.setFromAxisAngle(_sa, -Math.sign(ang) * over);
+  knee.sub(root).applyQuaternion(_sq).add(root);
+  return true;
+}
 
 function solveLegExact(i: LegSolveInput, hipParent: THREE.Object3D): boolean {
+  legLast.swivel = false;
   // getWorldQuaternion / worldToLocal refresh the ancestor chain themselves
   const pw = hipParent.getWorldQuaternion(_xq);
   const targetLocal = hipParent.worldToLocal(_xt.copy(i.targetWorld));
@@ -98,6 +135,9 @@ function solveLegExact(i: LegSolveInput, hipParent: THREE.Object3D): boolean {
   const L1 = i.knee.position.length();
   const L2 = i.ankle.position.length();
   solveIK2(hipLocal, targetLocal, L1, L2, poleLocal, _xk, i.prevKnee, true);
+  if (i.swivelFrom && i.maxSwivel !== undefined) {
+    if (limitSwivel(hipLocal, targetLocal, _xk, i.swivelFrom, i.maxSwivel)) legLast.swivel = true;
+  }
 
   // hip: minimal arc from its rest child direction onto the solved knee, in parent space
   _xu.copy(i.knee.position).normalize();

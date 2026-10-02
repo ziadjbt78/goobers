@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import type { HeroTemplate } from '../hero/types';
 import type { HeroHandle } from '../render/hero/HeroRenderer';
-import { solveLeg, Wobble } from './pose';
+import { solveLeg, Wobble, legLast } from './pose';
 
 const X = new THREE.Vector3(1, 0, 0);
 const Y = new THREE.Vector3(0, 1, 0);
@@ -32,6 +32,9 @@ const PLANT_RATE = 40;
 /** v18 soft IK band: reach is untouched below SOFT_START and approaches SOFT_TOP asymptotically */
 const SOFT_START = 0.93;
 const SOFT_TOP = 0.99;
+/** v20 task-space limits: foot target speed (leg lengths / s) and knee swivel about hip->foot (rad/s) */
+const FOOT_RATE = 18;
+const SWIVEL_RATE = 10;
 function crossedPhase(a: number, b: number, m: number): boolean {
   if (b >= a) return a < m && b >= m;
   return a < m || b >= m;
@@ -771,6 +774,7 @@ export class HeroAnimator {
       for (let li = 0; li < this.legs.length; li++) {
         const L = this.legs[li];
         L.relaunch = true; L.mode = 'plant'; L.err = 0; L.postErr = 0;
+        (L as unknown as { tPrev?: THREE.Vector3 }).tPrev = undefined;
         L.knee.quaternion.copy(restQ[li][0]);
         L.ankle.quaternion.copy(restQ[li][1]);
         this._limitLeg(L, maxF);
@@ -849,15 +853,30 @@ export class HeroAnimator {
       this._softReach(this._ft, hip, L.reachW);
       // v17: clamped along hip->lock = raised off the ground, not sliding on it
       if (L.mode === 'plant' && !L.landPending && this._ft.distanceTo(this._lk) > 0.01) L.lifted = true;
+      // v20 TASK-SPACE LIMIT: the foot target moves at most FOOT_RATE leg-lengths per second.
+      // The IK stays exact, so the rendered foot IS the target: smooth AND no slip.
+      {
+        const LT = L as unknown as { tPrev?: THREE.Vector3 };
+        if (!LT.tPrev) LT.tPrev = this._ft.clone();
+        else {
+          const mv = this._ft.distanceTo(LT.tPrev);
+          const cap = FOOT_RATE * Math.max(1e-3, L.reachW) * dt;
+          if (mv > cap && mv > 1e-6) this._ft.sub(LT.tPrev).multiplyScalar(cap / mv).add(LT.tPrev);
+          LT.tPrev.copy(this._ft);
+        }
+      }
       this._goal.copy(this._ft);
       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
-      const LX = L as unknown as { fb: boolean; bendRate: number; bendPrev: number };
-      LX.fb = false;
+      const LX = L as unknown as { fb: boolean; sw: boolean; bendRate: number; bendPrev: number };
+      LX.fb = false; LX.sw = false;
+      // v20: knee swivel is limited against the knee of the PREVIOUS FRAME (body space)
+      this._kp.copy(L.kneeLocal);
       let err = 0;
       for (let it = 0; it < 3; it++) {
         // v19 EXACT solve: in the hip parent's own (squashed) space, no world-frame twist, feet face the heading
-        if (solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal, exact: true, footWorld: gq })) LX.fb = true;
+        if (solveLeg({ hip: L.hip, knee: L.knee, ankle: L.ankle, targetWorld: this._ft, poleWorld: this._pole, prevKnee: L.kneeLocal, exact: true, footWorld: gq, swivelFrom: this._kp, maxSwivel: SWIVEL_RATE * dt })) LX.fb = true;
+        if (legLast.swivel) LX.sw = true;
         L.hip.updateWorldMatrix(false, true);
         this._aw.setFromMatrixPosition(L.ankle.matrixWorld);
         const ex = this._goal.x - this._aw.x, ey = this._goal.y - this._aw.y, ez = this._goal.z - this._aw.z;
@@ -868,7 +887,8 @@ export class HeroAnimator {
       }
       L.err = err;
       if (L.mode === 'plant' && !L.landPending && err > this.liftStats.maxErr) this.liftStats.maxErr = err;
-      const maxD = (L.mode === 'swing' || L.landPending ? LEG_RATE : PLANT_RATE) * dt;
+      // v20: bone-space limiter is a SAFETY NET only (it dragged planted feet: post-limiter slip)
+      const maxD = 1.5 * PLANT_RATE * dt;
       for (let k = 0; k < 3; k++) {
         const bone = k === 0 ? L.hip : k === 1 ? L.knee : L.ankle;
         const q = L.prev[k];
@@ -920,6 +940,7 @@ export class HeroAnimator {
   private _hw2 = new THREE.Vector3();
   private _b1 = new THREE.Vector3();
   private _b2 = new THREE.Vector3();
+  private _kp = new THREE.Vector3();
   private _goal = new THREE.Vector3();
   private _lk = new THREE.Vector3();
   private _sc = new THREE.Vector3();

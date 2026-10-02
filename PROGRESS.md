@@ -170,3 +170,11 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - ik.ts: soft pole fallback (blend toward previous knee plane) for the exact path; ikLast.fallback for forensics.
 - Perf: no full-subtree matrix refresh per solve, matrix reads instead of chain refreshes in the leg solve and readFeet.
 - watch: walk-peak line adds knee BEND rate and pole fallback. dump.sh also splits watch.mjs, Stage, World, materials.
+
+
+## v20 (batch 9)
+- HeroAnimator: foot target rate-limited in TASK space (FOOT_RATE 18 leg-lengths/s); bone-space limiter demoted to a
+  1.5x PLANT_RATE safety net (it caused MOCHI post-limiter slip). Target history reset while legs hang free.
+- pose.ts: knee SWIVEL limit (SWIVEL_RATE 10 rad/s) about the hip->foot line vs last frame's knee: foot stays exact,
+  bend unchanged. legLast.swivel for forensics.
+- watch: walk-peak line adds swivel-limited. dump.sh adds HeroRenderer, terrain, emotes, props, geometry.

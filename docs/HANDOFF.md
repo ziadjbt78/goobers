@@ -58,19 +58,21 @@ Direct answers, no filler. English only.
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
 | 1-5 (v12-v16) | locomotion rebuild, crowd, save/load, brain LOD | DONE |
 | 6 (v17) | procedural audio, exact save reload, walk-only gates, profiler | DONE |
-| 7 (v18) | torso rate limit, soft IK, eased crouch, profiler split, render budget | DONE: BODY gates PASS x4, walk slip PASS x3 |
-| 8 (v19) | EXACT parent-space leg IK (pose.ts/ik.ts, World path only), feet face heading, continuous pole fallback, solver perf, bend-vs-twist forensics, dump adds watch.mjs/Stage/World/materials | SHIPPED, awaiting report |
+| 7 (v18) | torso rate limit, soft IK, eased crouch, profiler split, render budget | DONE |
+| 8 (v19) | exact parent-space leg IK, feet face heading, soft pole fallback, solver perf | DONE: IK miss 14 -> 0.04 cm, action slips gone, sim linear PASS |
+| 9 (v20) | task-space leg limits: foot target speed 18 reach/s + knee swivel 10 rad/s (pose.ts), bone limiter -> 60 rad/s safety net, swivel forensics, dump adds HeroRenderer/terrain/emotes/props/geometry | SHIPPED, awaiting report |
 
-## Last results (v18 watch 3e77c5b)
-WALK slip PASS (worst 0.38 cm). BODY snap PASS (14 rad/s; raw 91 'sleep'). WALK leg joint FAIL: PIP 27.5, MOCHI 33.5, ZIK 39.5,
-all planted, NOT straight (reach 0.83-0.96), 0.03-0.13 s after landing. Diagnosis: legacy aim used world-frame minimal arcs
-(twist pops; ZIK splayed legs flip at some headings) and ignored body squash (IK miss in actions). Also ankles were world-locked
-(feet always faced world +Z). Sim @24 13.55 ms, 4.72x for 3x (FAIL). Render @24: 388 draw calls, 977k tris (~40k/creature, eyes ~15k).
+## Last results (v19 watch 2fb7c42)
+PIP walk slip PASS 0.14 cm, ZIK PASS 0.82 cm, MOCHI FAIL 3.62 cm / 9.4% (all 8: IK miss 0.0, post-limiter 4.9 cm => the
+bone limiter itself dragged the foot). Walk joint peaks all exactly 40 = PLANT_RATE cap, knee BEND rate only 4.5-4.7 =>
+knee-plane swivel about hip->foot right after landing (0.03 s), not bend. BODY gates PASS. Save/load PASS. Sim @24 11.25 ms, 3.49x PASS.
+Render @24: 388 draw calls, 977k tris. NOTE: jsDelivr serves HeroRenderer.ts gzipped-garbled -> now read via watch/src pieces.
 
 ## Next
-1. Read v19: WALK joint gates + "knee BEND rate" (bend low => remaining peak is twist on round limbs), pole fallback,
-   action slip IK miss (should collapse), sim cost scaling. Pedestal must still PASS.
-2. Batch 9 = VERTICAL SLICE VISUAL PASS (read Stage/World/materials/watch.mjs pieces from watch/src first): contact shadows,
-   grading/tonemap, soft bloom, wind grass, water; per-creature frustum cull + screen-size LOD (eye segments, outline far);
-   ask Ziad for ONE screenshot.
+1. Read v20: walk slip x3 (MOCHI must PASS), walk joint gates, "swivel-limited" flag, straight-walk probe slip. Pedestal PASS.
+   If joint still > 20 with bend low and swivel-limited false: twist from minimal-arc chain -> add hip twist continuity.
+   If foot-target clamp causes late landings: raise FOOT_RATE.
+2. Batch 10 = VERTICAL SLICE VISUAL PASS (read HeroRenderer/World/terrain/props pieces first): per-creature contact shadow,
+   colour grading + soft bloom, wind grass, water shimmer, screen-size LOD (sphere segments, outline/glints far), frustum cull.
+   Ask Ziad for ONE screenshot after.
 3. Then Sim.ts split (tools / probes / save), zero behaviour change; then faces + tool juice.

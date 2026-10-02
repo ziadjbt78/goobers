@@ -3,8 +3,8 @@
  * mounted from `buildMaterials()`, which every 3D page calls before it draws
  * anything — no view can forget it.
  */
-export const BUILD_NUMBER = 19;
-export const BUILD_STAMP = '2026-10-02 14:28';
+export const BUILD_NUMBER = 20;
+export const BUILD_STAMP = '2026-10-02 14:45';
 export const BUILD_LABEL = `build v${BUILD_NUMBER} · ${BUILD_STAMP}`;
 
 let mounted = false;
