@@ -134,6 +134,8 @@ interface LegRig {
   relaunch: boolean;
   /** v15: rest rotation of the hip's parent relative to the creature, for a body-space pole */
   parRel: THREE.Quaternion | null;
+  /** v16: planted foot raised straight up because the body lifted past its reach */
+  lifted: boolean;
 }
 
 interface ArmRig { upper: THREE.Bone; lower: THREE.Bone; side: number }
@@ -251,7 +253,7 @@ export class HeroAnimator {
         bodyAtPlant: new THREE.Vector3(),
         L1: knee.position.length(), L2: ankle.position.length(),
         restAngle: Math.atan2(f.plant.x, f.plant.z), forced: false,
-        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0, postErr: 0, relaunch: false, parRel: null,
+        landPending: false, landT: 1, prevU: 0, err: 0, reachW: 0, postErr: 0, relaunch: false, parRel: null, lifted: false,
       });
       this.drive.footTargets.push(f.plant.clone());
       this.drive.footSwing.push(false);
@@ -697,6 +699,12 @@ export class HeroAnimator {
 
   private _hips: Set<THREE.Object3D> | null = null;
   /** v12: the hip bones the leg IK owns, so the Agent can preserve additive limb poses. */
+  /** v16: true while a planted foot is raised off its lock (body out of reach). */
+  legLifted(index: number): boolean {
+    const L = this.legs.find((l) => l.index === index);
+    return !!L && L.lifted;
+  }
+
   /** v15: template foot index of the leg whose hip is `b`, or -1. */
   legIndexOfHip(b: THREE.Object3D): number {
     const L = this.legs.find((l) => l.hip === b);
@@ -814,10 +822,20 @@ export class HeroAnimator {
         }
       }
       this._worldFootTarget(L, this._ft, dt);
-      this._goal.copy(this._ft);
       const hip = L.hip.getWorldPosition(this._hw2);
       const rMax = 0.985 * L.reachW;
+      // v16: a planted foot the body has risen away from lifts STRAIGHT UP on its
+      // lock (keeps x/z) instead of being dragged sideways toward the hip
+      L.lifted = false;
+      if (L.mode === 'plant' && !L.landPending) {
+        const dxz = Math.hypot(this._ft.x - hip.x, this._ft.z - hip.z);
+        if (dxz < rMax) {
+          const minY = hip.y - Math.sqrt(rMax * rMax - dxz * dxz);
+          if (this._ft.y < minY) { L.lifted = minY - this._ft.y > 0.01; this._ft.y = minY; }
+        }
+      }
       this._clampReach(this._ft, hip, rMax);
+      this._goal.copy(this._ft);
       // v13 CLOSED-LOOP IK: squash shears the leg's parent space, so the aim
       // misses. Measure where the ankle REALLY went and re-aim, up to 3 times.
       let err = 0;

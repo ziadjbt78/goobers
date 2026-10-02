@@ -56,17 +56,16 @@ Direct answers, no filler. English only.
 |---|---|---|
 | infra | repo, ship.sh, watch.sh (headless playtest), dump.sh (source pieces + SEND THIS line) | DONE |
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1 (v12) | legs solve LAST (Agent -> HeroAnimator.solveWorldLegs), edge-triggered stepper, crowd hard-resolve | overlap FIXED |
-| 2 (v13) | crouch, closed-loop IK, strain lift, planted rate cap 40 | overstretch FIXED, avg slip ~1 cm |
-| 3 (v14) | jump-aware free feet, leg-only joint gate, SLIP FORENSICS | walk clean; 97-100% of slips are in ACTIONS |
-| 4 (v15) | eased free legs, swing-in relaunch, hop hysteresis, kick=airborne, body-space pole | SHIPPED 2026-10-02 13:29, awaiting report |
+| 1-4 (v12-v15) | legs solve last, stepper, crouch, closed-loop IK, free legs, body-space pole, crowd resolve | walk clean, overlap 0, action pops remain |
+| 5 (v16) | vertical-lift clamp, save/load (save.ts), brain LOD, save + sim-cost gates | SHIPPED 2026-10-02 13:40, awaiting report |
 
-## Last results (v14 watch b6e6312)
-ZIK straight walk slip 0.18 cm (PASS level). Free-run >1 cm steps PIP 24 / MOCHI 18 / ZIK 4.6 %, ALL during actions,
-one-frame pops. Leg joint 63 / 94 / 87 rad/s on hips (planted). Joint probe 185 rad/s = free-mode hip snap.
+## Last results (v15 watch 6edacb3)
+Leg joint 38 / 35 / 40 rad/s (was 63-94). Avg slip 0.88 / 0.56 / 0.29 cm. Slides >1 cm 30 / 20 / 4.4 % of steps,
+96-100% inside actions, one-frame pops: planted lock out of reach -> sideways clamp. Fixed in v16 by vertical lift.
 
 ## Next
-1. Read v15 gates. If action slips remain, read the SLIP FORENSICS top-8 list and fix the specific action.
-2. FOUNDATION batch (next, regardless of minor outliers): read Sim_00..04 in full, split Sim.ts into systems,
-   save/load, seeded world, distance LOD, 60 fps @ 12 gate.
-3. Then visual / feel / tools / slice per docs/ROADMAP.md and the NORTH STAR above.
+1. Read v16 gates. If walk gates pass or are near, locomotion is DONE: stop locomotion work.
+2. Batch 6 FOUNDATION part 2: read Sim_00..04 fully, move tools (call/feed/ball/pet/carry/inspect + choreo) to
+   src/engine/world/systems/Tools.ts and probes to tools/Probes.ts as plain functions taking Sim;
+   Sim keeps lifecycle + step. Add render LOD (far creatures: no outline, no blush/glint) + fps gate.
+3. Batch 7+: visual pass (tone map, shadows, bloom, grading, wind grass, water) per ROADMAP + NORTH STAR.

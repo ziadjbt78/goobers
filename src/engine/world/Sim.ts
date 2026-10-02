@@ -27,6 +27,8 @@ import { Emotes, type Glyph } from '../render/hero/emotes';
 import { Vfx } from './vfx';
 import { World } from './World';
 import { buildTerrain, buildSea, buildFoam, heightAt, isDry, WALK_R } from './terrain';
+import { readSave, writeSave, clearSave, type SaveFile } from './save';
+import { BUILD_LABEL } from '../core/build';
 
 export type Tool = 'none' | 'spawn' | 'call' | 'feed' | 'ball' | 'pet' | 'carry' | 'inspect';
 
@@ -77,6 +79,13 @@ export class Sim {
   private tagLayer: HTMLElement | null = null;
   private tagEls = new Map<number, HTMLDivElement>();
   private trampleTimer = 0;
+  /** v16: species + name seed per creature, for save/load */
+  private heroOf = new Map<number, HeroId>();
+  private seedOf = new Map<number, number>();
+  /** v16 brain LOD accumulators */
+  private brainAcc = new Map<number, number>();
+  private lodTick = 0;
+  private saveTimer = 0;
 
   constructor(canvas: HTMLCanvasElement, seed = 20261001) {
     buildMaterials();
@@ -111,6 +120,18 @@ export class Sim {
       for (let i = 0; i < 2; i++) this.spawn(id, this.world.randomSpot(this.rng), true);
     }
 
+    // v16: continue the player's island if a save exists (never under automation; ?fresh skips)
+    const saved = readSave();
+    if (saved && !this.loadState(JSON.stringify(saved))) clearSave();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', (e) => {
+        const tg = e.target;
+        if (tg instanceof HTMLInputElement || tg instanceof HTMLTextAreaElement) return;
+        if (e.shiftKey && (e.key === 'N' || e.key === 'n')) { clearSave(); location.reload(); }
+      });
+      window.addEventListener('beforeunload', () => this.autosave());
+    }
+
     this.loop = new Loop(
       (dt) => this.step(dt),
       (_a, dt) => {
@@ -126,6 +147,54 @@ export class Sim {
 
   start(): void { this.loop.start(); }
   stop(): void { this.loop.stop(); }
+
+  heroIdOf(a: Agent): HeroId | undefined { return this.heroOf.get(a.id); }
+
+  /** v16: the whole island as JSON (species, DNA, name seed, position, needs). */
+  saveState(): string {
+    const f: SaveFile = { v: 1, build: BUILD_LABEL, seed: this.seed, simTime: this.simTime, day: this.world.day, creatures: [] };
+    for (const a of this.agents) {
+      const hero = this.heroOf.get(a.id);
+      if (!hero) continue;
+      const b = this.brains.get(a.id);
+      f.creatures.push({
+        hero, dna: a.dna, seed: this.seedOf.get(a.id) ?? 0,
+        x: a.pos.x, z: a.pos.z, h: a.heading,
+        needs: b ? { ...(b.needs as unknown as Record<string, number>) } : undefined,
+      });
+    }
+    return JSON.stringify(f);
+  }
+
+  /** v16: replace the island with a saved one. Returns false (and changes nothing) on a bad file. */
+  loadState(json: string): boolean {
+    let f: SaveFile;
+    try { f = JSON.parse(json) as SaveFile; } catch { return false; }
+    if (!f || f.v !== 1 || !Array.isArray(f.creatures) || !f.creatures.length) return false;
+    this.endInspect();
+    for (const a of [...this.agents]) this.remove(a);
+    this.choreo.length = 0;
+    for (const c of f.creatures) {
+      try {
+        const a = this.spawn(c.hero, new THREE.Vector3(c.x, heightAt(c.x, c.z), c.z), true, c.dna, c.seed);
+        const b = this.brains.get(a.id);
+        if (b && c.needs) Object.assign(b.needs as unknown as Record<string, number>, c.needs);
+      } catch { /* skip one bad record, keep the rest */ }
+    }
+    if (typeof f.day === 'number' && !this.dayFrozen) this.world.day = f.day;
+    return this.agents.length > 0;
+  }
+
+  autosave(): void { if (this.agents.length) writeSave(this.saveState()); }
+
+  /** v16 LOD: brains of creatures far from the camera think every 3rd step on the accumulated dt. */
+  private brainDt(a: Agent, dt: number): number {
+    const far = this.stage.camera.position.distanceTo(a.pos) > 16;
+    const acc = (this.brainAcc.get(a.id) ?? 0) + dt;
+    if (far && (this.lodTick + a.id) % 3 !== 0) { this.brainAcc.set(a.id, acc); return 0; }
+    this.brainAcc.set(a.id, 0);
+    return acc;
+  }
 
   /** v9 G key: 0 none, 1 pitch+, 2 roll+, 3 left limb forward, 4 wave+. */
   testPose = 0;
@@ -144,6 +213,9 @@ export class Sim {
 
   step(dt: number): void {
     this.simTime += dt;
+    this.lodTick++;
+    this.saveTimer += dt;
+    if (this.saveTimer > 15) { this.saveTimer = 0; this.autosave(); }
     this.world.update(dt);
     if (this.dayFrozen) {
       this.world.day = this.frozenDay;
@@ -158,9 +230,12 @@ export class Sim {
       if (ov > 0) this.overrides.set(a.id, ov - dt);
       const b = this.brains.get(a.id);
       if (b && this.brainEnabled && ov <= 0) {
-        b.update(dt, a, this.world);
-        const want = ANIM_ACTION[b.action] ?? 'none';
-        if (a.action !== want && a.action !== 'petRoll' && a.action !== 'chomp' && a.action !== 'wave') a.begin(want);
+        const bdt = this.brainDt(a, dt);
+        if (bdt > 0) {
+          b.update(bdt, a, this.world);
+          const want = ANIM_ACTION[b.action] ?? 'none';
+          if (a.action !== want && a.action !== 'petRoll' && a.action !== 'chomp' && a.action !== 'wave') a.begin(want);
+        }
       }
       a.update(dt);
     }
@@ -263,8 +338,8 @@ export class Sim {
   }
 
   // ---- creature lifecycle --------------------------------------------------
-  spawn(hero: HeroId, at: THREE.Vector3 | null, quiet = false): Agent {
-    const dna: HeroDNA = randomDNA(this.rng, hero);
+  spawn(hero: HeroId, at: THREE.Vector3 | null, quiet = false, dnaIn?: HeroDNA, seedIn?: number): Agent {
+    const dna: HeroDNA = dnaIn ?? randomDNA(this.rng, hero);
     const pal = paletteAt(dna.palette);
     const colors = {
       base: hexToLinear(pal.base), belly: hexToLinear(pal.belly), limb: hexToLinear(pal.limb),
@@ -272,7 +347,10 @@ export class Sim {
     };
     const template = applyDNA(buildHeroTemplate(hero, colors), dna);
     const handle = buildHero(template, pal);
-    const agent = new Agent(this.world, template, dna, handle, this.seed + this.agents.length * 7919 + Math.floor(this.rng() * 1e6));
+    const agentSeed = seedIn ?? (this.seed + this.agents.length * 7919 + Math.floor(this.rng() * 1e6));
+    const agent = new Agent(this.world, template, dna, handle, agentSeed);
+    this.heroOf.set(agent.id, hero);
+    this.seedOf.set(agent.id, agentSeed);
     const p = at ?? this.world.randomSpot(this.rng);
     agent.place(p.x, p.z);
     agent.onFootfall = (x, y, z, power) => this.vfx.dust(x, y, z, power);
@@ -326,6 +404,9 @@ export class Sim {
     const j = this.world.agents.indexOf(a);
     if (j >= 0) this.world.agents.splice(j, 1);
     this.brains.delete(a.id);
+    this.heroOf.delete(a.id);
+    this.seedOf.delete(a.id);
+    this.brainAcc.delete(a.id);
     if (this.selected === a) this.selected = null;
     if (this.follow === a) this.follow = null;
     if (this.carried === a) this.carried = null;

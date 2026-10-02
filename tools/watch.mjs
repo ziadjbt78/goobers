@@ -217,6 +217,37 @@ if (free) log(`  overlap ${free.overlapFrames === 0 ? 'NONE' : `${free.overlapFr
 log(`  console errors ${errs.length}`);
 for (const e of errs.slice(0, 8)) log('    ' + e.slice(0, 240));
 
+log('\n## SAVE / LOAD');
+let saveOK = false;
+await safe('save', async () => {
+  const r = await p.evaluate(() => {
+    const s = window.__lab;
+    const key = (list) => list.map((a) => `${s.heroIdOf(a)}:${a.pos.x.toFixed(2)},${a.pos.z.toFixed(2)}:${a.dna.scale.toFixed(3)}`).sort().join('|');
+    const before = key(s.agents);
+    const json = s.saveState();
+    const ok = s.loadState(json);
+    return { ok, n: s.agents.length, bytes: json.length, same: before === key(s.agents) };
+  });
+  saveOK = r.ok && r.same;
+  log(`  creatures ${r.n} | save ${r.bytes} bytes | reload identical ${r.same}`);
+});
+
+log('\n## SIM COST (CPU only, no render)');
+const perf = {};
+await safe('perf', async () => {
+  const r = await p.evaluate((dt) => {
+    const s = window.__lab; s.loud();
+    const time = () => { for (let i = 0; i < 30; i++) s.step(dt); const t0 = performance.now(); for (let i = 0; i < 120; i++) s.step(dt); return (performance.now() - t0) / 120; };
+    const n0 = s.agents.length; const m0 = time();
+    const base = [...s.agents];
+    for (let i = 0; i < 16; i++) s.spawn(s.heroIdOf(base[i % base.length]), null, true);
+    const n1 = s.agents.length; const m1 = time();
+    return { n0, m0, n1, m1 };
+  }, DT);
+  Object.assign(perf, r);
+  log(`  ${r.n0} creatures ${r.m0.toFixed(2)} ms/step | ${r.n1} creatures ${r.m1.toFixed(2)} ms/step | ${(r.m1 / r.n1).toFixed(3)} ms per creature`);
+});
+
 log('\n## GATES');
 const gate = (name, ok, val) => log(`  ${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(30)} ${val}`);
 for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
@@ -228,5 +259,7 @@ for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
 }
 gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
 gate('console errors = 0', errs.length === 0, errs.length);
+gate('save/load identical', saveOK, saveOK ? 'yes' : 'no');
+gate('sim 24 creatures <= 8 ms/step', perf.m1 !== undefined && perf.m1 <= 8, perf.m1 !== undefined ? `${perf.m1.toFixed(2)} ms` : '-');
 writeFileSync(`${OUT}/REPORT.md`, '```\n' + L.join('\n') + '\n```\n');
 await b.close();

@@ -389,7 +389,7 @@ export class Agent implements HashEntry {
       // the stance/swing flag now comes from the real world-planting solver
       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
       const leg = legs?.find((l) => l.index === i);
-      const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree || this.kicking.has(i);
+      const swinging = (leg ? leg.mode === 'swing' : false) || this.hero.legsFree || this.kicking.has(i) || this.hero.legLifted(i);
       f.swinging = swinging;
       f.swing = 0;
       if (!swinging && hipBone && kneeBone && bone) {

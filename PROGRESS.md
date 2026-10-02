@@ -142,3 +142,10 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - Re-landing swings from the real ankle instead of teleporting the lock. Hop hysteresis 6% on / 2.5% off.
 - Choreo kick/flail/wave on a planted hip marks that foot airborne.
 - IK pole rides the hip's parent (body) so action pitch/roll cannot flip the knee branch.
+
+
+## v16 (2026-10-02 13:40): Batch 5, foundation part 1
+- Planted foot out of reach lifts vertically on its lock (no sideways drag); lifted = airborne.
+- save.ts: autosave 15 s + on unload, restore on boot, ?fresh skips, Shift+N new island; off under webdriver.
+- Sim: spawn(hero, at, quiet, dna?, seed?), saveState/loadState/heroIdOf; brain LOD (>16 u from camera thinks every 3rd step).
+- watch: SAVE/LOAD + SIM COST sections and gates.
