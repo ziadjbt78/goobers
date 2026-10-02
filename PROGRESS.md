@@ -115,3 +115,10 @@ frames 0; pedestal regression 0 diff.
 Sandbox gotcha: never `pkill -f "vite preview"` from inside a tool shell — it
 kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start with
 `setsid`. `python3 -m http.server 8137 --directory dist` also serves the build.
+
+
+## v12 (2026-10-02 09:09): Batch 1, World locomotion
+- World legs now solve LAST (Agent -> HeroAnimator.solveWorldLegs), after root/heading/body juice are final.
+- Stepper: edge-triggered lifts, live world-space reach, predictive re-aimed landing, lock-where-landed, airborne-count limits; angle guard removed.
+- Additive hip poses (kick/flail/G-probe) preserved over IK. Hard crowd separation. Overstretch counter uses world lengths.
+- Pedestal path verbatim (moved into _solveLegsPedestal).

@@ -171,5 +171,16 @@ if (free) log(`  overlap ${free.overlapFrames === 0 ? 'NONE' : `${free.overlapFr
 log(`  console errors ${errs.length}`);
 for (const e of errs.slice(0, 8)) log('    ' + e.slice(0, 240));
 
+log('\n## GATES');
+const gate = (name, ok, val) => log(`  ${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(30)} ${val}`);
+for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
+  const o = free?.out?.[sp]; if (!o) continue;
+  const pct = o.stances ? (100 * o.bad) / o.stances : 0;
+  gate(`${sp} worst slip <= 2 cm`, (o.worst ?? 0) <= 0.02, `${((o.worst ?? 0) * 100).toFixed(2)} cm`);
+  gate(`${sp} steps >1 cm <= 2%`, pct <= 2, `${pct.toFixed(1)}%`);
+  gate(`${sp} joint <= 20 rad/s`, (o.joint ?? 0) <= 20, `${(o.joint ?? 0).toFixed(1)} on ${o.jointBone ?? '-'}`);
+}
+gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
+gate('console errors = 0', errs.length === 0, errs.length);
 writeFileSync(`${OUT}/REPORT.md`, '```\n' + L.join('\n') + '\n```\n');
 await b.close();

@@ -86,6 +86,10 @@ export class Agent implements HashEntry {
   private prevSwing: boolean[] = [];
   private rng: () => number;
   private _hip = new THREE.Vector3();
+  private _kneeW = new THREE.Vector3();
+  /** v12: rest + per-frame additive delta of the rig's upper-leg bones */
+  private legRest: THREE.Quaternion[] = [];
+  private legDelta: (THREE.Quaternion | undefined)[] = [];
   private static NEXT_ID = 1;
 
   constructor(world: World, template: HeroTemplate, dna: HeroDNA, handle: HeroHandle, seed: number) {
@@ -115,6 +119,7 @@ export class Agent implements HashEntry {
       ? handle.bones[f0.chain[1]].position.length() + handle.bones[f0.chain[2]].position.length()
       : 0;
     this.motion = new CreatureMotion(rig, locoConfigFor(template, height, liveReach), new THREE.Vector3(), 0);
+    this.legRest = rig.legs.map((b) => b.quaternion.clone());
 
     for (let i = 0; i < template.feet.length; i++) {
       const f = template.feet[i];
@@ -278,6 +283,10 @@ export class Agent implements HashEntry {
           const push = ((minD - d) / minD) * this.topSpeed * 0.6;
           this.desired.x += (dx / d) * push;
           this.desired.z += (dz / d) * push;
+          // v12 hard resolve: steering alone loses to turn-first and to busy creatures
+          const k = (minD - d) * 0.5 * Math.min(1, dt * 10);
+          this.pos.x += (dx / d) * k;
+          this.pos.z += (dz / d) * k;
         }
       }
     }
@@ -316,6 +325,24 @@ export class Agent implements HashEntry {
       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
     }
 
+    // v12: legs solve LAST, against the final root / heading / body pose. Any
+    // additive pose the motion layer put on a hip (kick, flail, G-probe) is
+    // captured first and re-applied on top of the IK.
+    const hips = this.hero.legHips();
+    const rl = this.rig.legs;
+    for (let i = 0; i < rl.length; i++) {
+      if (!hips.has(rl[i]) || !this.legRest[i]) continue;
+      this.legDelta[i] = (this.legDelta[i] ?? new THREE.Quaternion()).copy(this.legRest[i]).invert().multiply(rl[i].quaternion);
+    }
+    const free = this.carried || this.motion.dangle.active || this.motion.dangle.airborne;
+    this.hero.solveWorldLegs(dt, free);
+    if (!free) {
+      for (let i = 0; i < rl.length; i++) {
+        const dq = this.legDelta[i];
+        if (dq && hips.has(rl[i]) && Math.abs(dq.w) < 0.999999) rl[i].quaternion.multiply(dq);
+      }
+    }
+
     this.readFeet();
     this.tickEmote(dt);
   }
@@ -350,8 +377,10 @@ export class Agent implements HashEntry {
       f.swinging = swinging;
       f.swing = 0;
       if (!swinging && hipBone && kneeBone && bone) {
-        const reach = (kneeBone.position.length() + bone.position.length()) * 0.95;
+        // v12: live world-space segment lengths; overstretch = leg locked straight
         const hw = hipBone.getWorldPosition(this._hip);
+        const kw = kneeBone.getWorldPosition(this._kneeW);
+        const reach = (hw.distanceTo(kw) + kw.distanceTo(f.pos)) * 0.98;
         if (hw.distanceTo(f.pos) > reach) this.overstretchFrames++;
       }
       // one dust puff per footfall, fired on the swing -> stance edge
