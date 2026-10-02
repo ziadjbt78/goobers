@@ -1,0 +1,196 @@
+    1| /**
+    2|  * HERO materials — FOUR programs for the whole application.
+    3|  *   toon    MeshToonMaterial  + fresnel rim      (shell, mouth, lids, blush)
+    4|  *   outline MeshBasicMaterial + normal push      (inverted hull)
+    5|  *   flat    MeshBasicMaterial                    (sky, ground, pedestal, shadow, eye glints)
+    6|  *   glossy  MeshPhongMaterial                    (eyeballs only)
+    7|  * No loops, no lookups, no arrays anywhere in any of them.
+    8|  */
+    9| import * as THREE from 'three';
+   10| import { mountBadge } from '../../core/build';
+   11| 
+   12| export const MAT = {
+   13|   toon: null as unknown as THREE.MeshToonMaterial,
+   14|   outline: null as unknown as THREE.MeshBasicMaterial,
+   15|   flat: null as unknown as THREE.MeshBasicMaterial,
+   16|   glossy: null as unknown as THREE.MeshPhongMaterial,
+   17|   lit: null as unknown as THREE.MeshLambertMaterial,
+   18|   foliage: null as unknown as THREE.MeshLambertMaterial,
+   19|   emote: null as unknown as THREE.MeshBasicMaterial,
+   20|   /** dark inverted hull for props: rocks, bushes, the sea rim */
+   21|   propOutline: null as unknown as THREE.MeshBasicMaterial,
+   22|   /** additive ground rings (call ripples, impact rings) */
+   23|   vfxRing: null as unknown as THREE.MeshBasicMaterial,
+   24|   /** soft billboard puffs (dust, sparkles) */
+   25|   vfxPuff: null as unknown as THREE.MeshBasicMaterial,
+   26|   time: { value: 0 },
+   27|   outlineWidth: { value: 0.015 },
+   28|   rimStrength: { value: 0.30 },
+   29|   ramp: null as unknown as THREE.DataTexture,
+   30|   built: false,
+   31| };
+   32| 
+   33| /** A 3-step ramp with soft band edges, generated in code. */
+   34| function rampTexture(): THREE.DataTexture {
+   35|   const N = 64;
+   36|   const data = new Uint8Array(N);
+   37|   const band = (t: number, edge: number): number => {
+   38|     const x = (t - edge) / 0.10;
+   39|     return x <= 0 ? 0 : x >= 1 ? 1 : x * x * (3 - 2 * x);
+   40|   };
+   41|   for (let i = 0; i < N; i++) {
+   42|     const t = i / (N - 1);
+   43|     const v = 0.55 + band(t, 0.30) * 0.24 + band(t, 0.63) * 0.30;
+   44|     data[i] = Math.min(255, Math.round(v * 255));
+   45|   }
+   46|   const tex = new THREE.DataTexture(data, N, 1, THREE.RedFormat);
+   47|   tex.minFilter = THREE.LinearFilter;
+   48|   tex.magFilter = THREE.LinearFilter;
+   49|   tex.wrapS = THREE.ClampToEdgeWrapping;
+   50|   tex.generateMipmaps = false;
+   51|   tex.needsUpdate = true;
+   52|   return tex;
+   53| }
+   54| 
+   55| export function buildMaterials(): void {
+   56|   if (MAT.built) return;
+   57|   // every 3D view calls this before it can draw, so the build badge is
+   58|   // guaranteed to exist on Heroes, Zoo, Studio and World alike
+   59|   mountBadge();
+   60|   MAT.ramp = rampTexture();
+   61| 
+   62|   const toon = new THREE.MeshToonMaterial({
+   63|     color: 0xffffff,
+   64|     vertexColors: true,
+   65|     gradientMap: MAT.ramp,
+   66|     fog: true,
+   67|   });
+   68|   toon.onBeforeCompile = (shader) => {
+   69|     shader.uniforms.uRim = MAT.rimStrength;
+   70|     shader.uniforms.uRimColor = { value: new THREE.Color('#fff0d0') };
+   71|     shader.fragmentShader = shader.fragmentShader
+   72|       .replace('#include <common>', '#include <common>\nuniform float uRim;\nuniform vec3 uRimColor;')
+   73|       .replace(
+   74|         '#include <dithering_fragment>',
+   75|         [
+   76|           'vec3 toyN = normalize( normal );',
+   77|           'vec3 toyV = normalize( vViewPosition );',
+   78|           'float toyRim = pow( 1.0 - clamp( dot( toyN, toyV ), 0.0, 1.0 ), 3.0 );',
+   79|           'gl_FragColor.rgb += uRimColor * toyRim * uRim;',
+   80|           '#include <dithering_fragment>',
+   81|         ].join('\n'),
+   82|       );
+   83|   };
+   84|   toon.customProgramCacheKey = () => 'hero-toon';
+   85| 
+   86|   const outline = new THREE.MeshBasicMaterial({
+   87|     vertexColors: true,
+   88|     side: THREE.BackSide,
+   89|     fog: true,
+   90|   });
+   91|   outline.onBeforeCompile = (shader) => {
+   92|     shader.uniforms.uOutline = MAT.outlineWidth;
+   93|     shader.vertexShader = shader.vertexShader
+   94|       .replace('#include <common>', '#include <common>\nuniform float uOutline;')
+   95|       .replace('#include <project_vertex>', 'transformed += objectNormal * uOutline;\n#include <project_vertex>');
+   96|   };
+   97|   outline.customProgramCacheKey = () => 'hero-outline';
+   98| 
+   99|   const flat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: true });
+  100| 
+  101|   const glossy = new THREE.MeshPhongMaterial({
+  102|     color: 0xffffff,
+  103|     vertexColors: true,
+  104|     specular: new THREE.Color('#ffffff'),
+  105|     shininess: 70,
+  106|     fog: true,
+  107|   });
+  108| 
+  109|   // Props and terrain: plain Lambert so they respond to the day/night lights
+  110|   // without a toon ramp banding across the ground.
+  111|   const lit = new THREE.MeshLambertMaterial({ vertexColors: true, fog: true });
+  112| 
+  113|   // Grass and flowers sway. One material, one program, thousands of instances.
+  114|   const foliage = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, fog: true });
+  115|   foliage.onBeforeCompile = (shader) => {
+  116|     shader.uniforms.uTime = MAT.time;
+  117|     shader.vertexShader = shader.vertexShader
+  118|       .replace('#include <common>', '#include <common>\nuniform float uTime;\nattribute float aSway;')
+  119|       .replace(
+  120|         '#include <begin_vertex>',
+  121|         [
+  122|           '#include <begin_vertex>',
+  123|           '#ifdef USE_INSTANCING',
+  124|           '  float seed = instanceMatrix[3][0] * 1.7 + instanceMatrix[3][2] * 2.3;',
+  125|           '#else',
+  126|           '  float seed = 0.0;',
+  127|           '#endif',
+  128|           '  float bend = max(position.y, 0.0) * aSway;',
+  129|           '  transformed.x += sin(uTime * 1.6 + seed) * bend * 0.55;',
+  130|           '  transformed.z += cos(uTime * 1.31 + seed * 1.4) * bend * 0.42;',
+  131|         ].join('\n'),
+  132|       );
+  133|   };
+  134|   foliage.customProgramCacheKey = () => 'hero-foliage';
+  135| 
+  136|   const emote = new THREE.MeshBasicMaterial({
+  137|     transparent: true, depthWrite: false, fog: false,
+  138|   });
+  139| 
+  140|   // Props get the same inverted-hull treatment as the creatures: a slightly
+  141|   // fattened back-face shell in a dark plum. Fixed colour (no vertexColors) so
+  142|   // a rock's own grey never leaks into its outline.
+  143|   const propOutline = new THREE.MeshBasicMaterial({
+  144|     color: new THREE.Color('#2b2136'),
+  145|     side: THREE.BackSide,
+  146|     fog: true,
+  147|   });
+  148|   propOutline.onBeforeCompile = (shader) => {
+  149|     shader.uniforms.uOutline = MAT.outlineWidth;
+  150|     shader.vertexShader = shader.vertexShader
+  151|       .replace('#include <common>', '#include <common>\nuniform float uOutline;')
+  152|       // props are NOT skinned, so the plain `normal` attribute is the one that
+  153|       // exists here; `objectNormal` only exists once skinning is in play.
+  154|       .replace('#include <project_vertex>', 'transformed += normal * uOutline * 0.75;\n#include <project_vertex>');
+  155|   };
+  156|   propOutline.customProgramCacheKey = () => 'prop-outline';
+  157| 
+  158|   // Tool feedback. Additive so a ripple glows against grass and against night.
+  159|   const vfxRing = new THREE.MeshBasicMaterial({
+  160|     vertexColors: true, transparent: true, opacity: 0.95,
+  161|     blending: THREE.AdditiveBlending, depthWrite: false,
+  162|     side: THREE.DoubleSide, fog: false,
+  163|   });
+  164|   const vfxPuff = new THREE.MeshBasicMaterial({
+  165|     vertexColors: true, transparent: true, opacity: 0.85,
+  166|     blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+  167|   });
+  168| 
+  169|   MAT.lit = lit;
+  170|   MAT.foliage = foliage;
+  171|   MAT.emote = emote;
+  172|   MAT.toon = toon;
+  173|   MAT.outline = outline;
+  174|   MAT.flat = flat;
+  175|   MAT.glossy = glossy;
+  176|   MAT.propOutline = propOutline;
+  177|   MAT.vfxRing = vfxRing;
+  178|   MAT.vfxPuff = vfxPuff;
+  179|   MAT.built = true;
+  180| }
+  181| 
+  182| export function disposeMaterials(): void {
+  183|   if (!MAT.built) return;
+  184|   MAT.toon.dispose();
+  185|   MAT.lit.dispose();
+  186|   MAT.foliage.dispose();
+  187|   MAT.emote.dispose();
+  188|   MAT.outline.dispose();
+  189|   MAT.flat.dispose();
+  190|   MAT.glossy.dispose();
+  191|   MAT.propOutline.dispose();
+  192|   MAT.vfxRing.dispose();
+  193|   MAT.vfxPuff.dispose();
+  194|   MAT.ramp.dispose();
+  195|   MAT.built = false;
+  196| }

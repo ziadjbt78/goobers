@@ -172,7 +172,7 @@
   422|       const bone = this.handle.bones[t.feet[i].chain[2]];
   423|       const hipBone = this.handle.bones[t.feet[i].chain[0]];
   424|       const kneeBone = this.handle.bones[t.feet[i].chain[1]];
-  425|       if (bone) bone.getWorldPosition(f.pos);
+  425|       if (bone) f.pos.setFromMatrixPosition(bone.matrixWorld); // v19: skeleton refreshed above
   426|       // the stance/swing flag now comes from the real world-planting solver
   427|       const legs = (this.hero as unknown as { legs: { index: number; mode: string }[] }).legs;
   428|       const leg = legs?.find((l) => l.index === i);
@@ -181,8 +181,8 @@
   431|       f.swing = 0;
   432|       if (!swinging && hipBone && kneeBone && bone) {
   433|         // v12: live world-space segment lengths; overstretch = leg locked straight
-  434|         const hw = hipBone.getWorldPosition(this._hip);
-  435|         const kw = kneeBone.getWorldPosition(this._kneeW);
+  434|         const hw = this._hip.setFromMatrixPosition(hipBone.matrixWorld);
+  435|         const kw = this._kneeW.setFromMatrixPosition(kneeBone.matrixWorld);
   436|         const reach = (hw.distanceTo(kw) + kw.distanceTo(f.pos)) * 0.98;
   437|         if (hw.distanceTo(f.pos) > reach) this.overstretchFrames++;
   438|       }

@@ -1,0 +1,38 @@
+  251|   watchContext(onLost: (m: string) => void, onRestored: () => void): void {
+  252|     this.onLost = onLost;
+  253|     this.onRestored = onRestored;
+  254|     const c = this.renderer.domElement;
+  255|     c.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.contextLost = true; this.onLost?.('WebGL context lost'); }, false);
+  256|     c.addEventListener('webglcontextrestored', () => { this.contextLost = false; this.onRestored?.(); }, false);
+  257|   }
+  258| 
+  259|   resize(w: number, h: number): void {
+  260|     this.renderer.setSize(w, h, false);
+  261|     this.camera.aspect = w / Math.max(1, h);
+  262|     this.camera.updateProjectionMatrix();
+  263|   }
+  264| 
+  265|   update(dt: number): void {
+  266|     this.controls.update();
+  267|     this.sky.position.copy(this.camera.position);
+  268|     this.stars.position.copy(this.camera.position);
+  269|     this.nightDome.position.copy(this.camera.position);
+  270|     void dt;
+  271|   }
+  272| 
+  273|   render(dtMs: number): void {
+  274|     if (this.contextLost) return;
+  275|     this.renderer.render(this.scene, this.camera);
+  276|     const info = this.renderer.info;
+  277|     stats.endFrame(dtMs, {
+  278|       calls: info.render.calls,
+  279|       triangles: info.render.triangles,
+  280|       programs: info.programs?.length ?? 0,
+  281|     });
+  282|   }
+  283| 
+  284|   dispose(): void {
+  285|     this.controls.dispose();
+  286|     this.renderer.dispose();
+  287|   }
+  288| }

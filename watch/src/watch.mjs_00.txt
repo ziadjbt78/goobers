@@ -1,0 +1,250 @@
+    1| // watch.mjs: headless "eyes". Plays the world, measures motion, writes watch/REPORT.md
+    2| import { chromium } from 'playwright';
+    3| import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+    4| 
+    5| const BASE = process.argv[2] ?? 'http://127.0.0.1:8137/';
+    6| const OUT = 'watch';
+    7| const DT = 1 / 30;
+    8| for (const f of ['REPORT.md', 'frames']) rmSync(`${OUT}/${f}`, { recursive: true, force: true });
+    9| mkdirSync(`${OUT}/frames`, { recursive: true });
+   10| 
+   11| const L = [];
+   12| const log = (s = '') => { console.log(s); L.push(s); };
+   13| const safe = async (name, fn) => { try { await fn(); } catch (e) { log(`  [${name}] SKIPPED: ${String(e).split('\n')[0].slice(0, 200)}`); } };
+   14| 
+   15| const b = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--use-gl=angle', '--disable-dev-shm-usage', '--no-sandbox'] });
+   16| const p = await b.newPage({ viewport: { width: 640, height: 400 }, deviceScaleFactor: 1 });
+   17| const errs = [];
+   18| p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+   19| p.on('pageerror', (e) => errs.push(String(e)));
+   20| 
+   21| await p.goto(BASE, { waitUntil: 'load', timeout: 180000 });
+   22| await p.waitForFunction('window.__READY === true && !!window.__lab', null, { timeout: 180000 });
+   23| 
+   24| log('# WATCH REPORT');
+   25| log(`date ${new Date().toISOString()}`);
+   26| log(`badge ${await p.evaluate(() => document.querySelector('.gs-build-badge')?.textContent ?? 'NO BADGE')}`);
+   27| 
+   28| // overview shot (normal camera, noon, after 10 s of life)
+   29| await safe('overview', async () => {
+   30|   await p.evaluate((dt) => { const s = window.__lab; s.pause(); s.setDay(0.5); for (let i = 0; i < 300; i++) s.step(dt); s.stage.update(0); s.stage.render(0); }, DT);
+   31|   await p.screenshot({ path: `${OUT}/overview.png` });
+   32| });
+   33| 
+   34| log('\n## PEDESTAL');
+   35| await safe('pedestal', async () => {
+   36|   const id = await p.evaluate(() => window.__lab.poseIdentity(180, 1 / 60));
+   37|   log(`  quat ${id.maxQuat.toExponential(2)} pos ${id.maxPos.toExponential(2)} -> ${id.maxQuat < 1e-6 && id.maxPos < 1e-5 ? 'PASS' : 'FAIL'}`);
+   38| });
+   39| 
+   40| log('\n## STRAIGHT WALK PROBE (8 s each)');
+   41| await safe('slipProbe', async () => {
+   42|   const slip = await p.evaluate(() => window.__lab.slipProbe(8));
+   43|   for (const [sp, v] of Object.entries(slip)) log(`  ${sp.padEnd(6)} slip ${(v.slip * 100).toFixed(2)} cm | overstretch ${v.overstretch}/${v.frames} | speed ${v.speed} | freq ${v.freq} Hz`);
+   44| });
+   45| 
+   46| log('\n## JOINT PROBE (20 s)');
+   47| const joint = {};
+   48| await safe('jointProbe', async () => {
+   49|   Object.assign(joint, await p.evaluate(() => window.__lab.jointProbe(20, 1 / 60)));
+   50|   for (const [sp, j] of Object.entries(joint)) log(`  ${sp.padEnd(6)} ${j.rate.toFixed(2)} rad/s on ${j.bone}${j.wasForced ? ' [FORCED STEP]' : ''}`);
+   51| });
+   52| 
+   53| log('\n## FREE-RUNNING WORLD (30 s, all creatures, real behaviour)');
+   54| let free = null;
+   55| await safe('freeRun', async () => {
+   56|   free = await p.evaluate(({ dt, steps }) => {
+   57|     const s = window.__lab;
+   58|     const spOf = (a) => a.template.name.split(' ')[0].toUpperCase();
+   59|     const cmp = s.constructor.compare;
+   60|     const out = {};
+   61|     for (const a of s.agents) a.hero.resetLiftStats?.();
+   62|     const st = new Map();
+   63|     const legQ = new Map();
+   64|     const bodyQ = new Map();
+   65|     const events = [];
+   66|     const prevPos = new Map();
+   67|     let overlapFrames = 0, minRatio = Infinity;
+   68|     let prev = s.probe ? s.probe() : null;
+   69|     for (let i = 0; i < steps; i++) {
+   70|       s.step(dt);
+   71|       if (cmp && prev) {
+   72|         const cur = s.probe(); const v = cmp(prev, cur, dt);
+   73|         for (const [n, x] of Object.entries(v.jointByName)) {
+   74|           const k = n.toUpperCase(); const o = (out[k] ??= {});
+   75|           if (x > (o.joint ?? 0)) { o.joint = x; o.jointBone = v.jointBoneByName[n]; }
+   76|           if (x > 20) o.kneeFrames = (o.kneeFrames ?? 0) + 1;
+   77|         }
+   78|         prev = cur;
+   79|       }
+   80|       const ag = s.agents;
+   81|       for (const a of ag) {
+   82|         const o = (out[spOf(a)] ??= {});
+   83|         const legs = a.hero.legs || [];
+   84|         { const bb = a.rig.body.quaternion, bq = bodyQ.get(a);
+   85|           if (bq) { const r = 2 * Math.acos(Math.min(1, Math.abs(bb.dot(bq)))) / dt; if (r > (o.bodyJ ?? 0)) { o.bodyJ = r; o.bodyAct = a.action; } bq.copy(bb); }
+   86|           if ((a.bodyRaw ?? 0) > (o.rawMax ?? 0)) { o.rawMax = a.bodyRaw; o.rawAct = a.action; o.rawPiv = a.pivotAng ?? 0; o.rawBusy = a.motion.busy; }
+   87|           else bodyQ.set(a, bb.clone()); }
+   88|         let lq = legQ.get(a);
+   89|         if (!lq) { lq = legs.map((L) => [L.hip.quaternion.clone(), L.knee.quaternion.clone(), L.ankle.quaternion.clone()]); legQ.set(a, lq); }
+   90|         else if (!a.hero.legsFree) legs.forEach((L, li) => { [L.hip, L.knee, L.ankle].forEach((b, bi) => {
+   91|           const q = lq[li][bi]; const r = 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(q)))) / dt;
+   92|           if (r > (o.legJ ?? 0)) { o.legJ = r; o.legJBone = `${b.name}(${L.mode})`; }
+   93|           if (!a.motion.busy && r > (o.wJ ?? 0)) {
+   94|             o.wJ = r; o.wJBone = `${b.name}(${L.mode})`;
+   95|             const V = a.pos.constructor; const hp = L.hip.getWorldPosition(new V()), ap = L.ankle.getWorldPosition(new V());
+   96|             o.wJctx = { rr: hp.distanceTo(ap) / Math.max(1e-4, L.reachW || 1), err: L.err ?? 0, landT: L.landT ?? 0, cd: a.hero.crouchD ?? 0, act: a.action, lifted: !!L.lifted, kick: !!(a.kicking && a.kicking.has && a.kicking.has(L.index)), bendR: L.bendRate ?? 0, fb: !!L.fb };
+   97|           }
+   98|           if (r > 20) o.legJFrames = (o.legJFrames ?? 0) + 1;
+   99|           q.copy(b.quaternion); }); });
+  100|         else legs.forEach((L, li) => { lq[li][0].copy(L.hip.quaternion); lq[li][1].copy(L.knee.quaternion); lq[li][2].copy(L.ankle.quaternion); });
+  101|         o.stances ??= 0; o.bad ??= 0; o.worst ??= 0; o.sum ??= 0; o.moving ??= 0; o.frames ??= 0;
+  102|         o.frames++;
+  103|         const pp = prevPos.get(a);
+  104|         if (pp && Math.hypot(a.pos.x - pp.x, a.pos.z - pp.z) / dt > 0.05) o.moving++;
+  105|         prevPos.set(a, { x: a.pos.x, z: a.pos.z });
+  106|         let m = st.get(a); if (!m) { m = []; st.set(a, m); }
+  107|         (a.feet || []).forEach((f, fi) => {
+  108|           const c = m[fi];
+  109|           if (!f.swinging) {
+  110|             if (!c) m[fi] = { x: f.pos.x, z: f.pos.z, px: f.pos.x, pz: f.pos.z, max: 0, jump: 0, err: 0, perr: 0, rr: 0, busy: false };
+  111|             else {
+  112|               const d = Math.hypot(f.pos.x - c.x, f.pos.z - c.z); if (d > c.max) c.max = d;
+  113|               const j = Math.hypot(f.pos.x - c.px, f.pos.z - c.pz); if (j > c.jump) c.jump = j;
+  114|               c.px = f.pos.x; c.pz = f.pos.z;
+  115|               const L = (a.hero.legs || []).find((l) => l.index === fi);
+  116|               if (L) {
+  117|                 c.err = Math.max(c.err, L.err ?? 0); c.perr = Math.max(c.perr, L.postErr ?? 0);
+  118|                 const hp = L.hip.getWorldPosition(new f.pos.constructor());
+  119|                 c.rr = Math.max(c.rr, hp.distanceTo(f.pos) / Math.max(1e-4, L.reachW || 1));
+  120|               }
+  121|               if (a.motion.busy) c.busy = true;
+  122|             }
+  123|           } else if (c) {
+  124|             o.stances++; o.sum += c.max; if (c.max > 0.01) o.bad++; if (c.max > o.worst) o.worst = c.max;
+  125|             if (!c.busy) { o.wSt = (o.wSt ?? 0) + 1; if (c.max > 0.01) o.wBad = (o.wBad ?? 0) + 1; if (c.max > (o.wWorst ?? 0)) o.wWorst = c.max; }
+  126|             if (c.max > 0.01) {
+  127|               const L = (a.hero.legs || []).find((l) => l.index === fi);
+  128|               events.push({ sp: spOf(a), leg: fi, slip: c.max, jump: c.jump, err: c.err, perr: c.perr, rr: c.rr, busy: c.busy, cause: L && L.forced ? 'forced' : 'beat' });
+  129|             }
+  130|             m[fi] = null;
+  131|           }
+  132|         });
+  133|       }
+  134|       let hit = false;
+  135|       for (let x = 0; x < ag.length; x++) for (let y = x + 1; y < ag.length; y++) {
+  136|         const A = ag[x], B = ag[y];
+  137|         const r = 0.3 * (A.template.height + B.template.height);
+  138|         const d = Math.hypot(A.pos.x - B.pos.x, A.pos.z - B.pos.z);
+  139|         if (d / r < minRatio) minRatio = d / r;
+  140|         if (d < r * 0.7) hit = true;
+  141|       }
+  142|       if (hit) overlapFrames++;
+  143|     }
+  144|     const lifts = {};
+  145|     for (const a of s.agents) {
+  146|       const L = a.hero.liftStats; if (!L) continue;
+  147|       const o = (lifts[spOf(a)] ??= { beat: 0, hard: 0, strain: 0, soft: 0, err: 0, crouch: 0, n: 0 });
+  148|       o.beat += L.beat; o.hard += L.hard; o.strain += L.strain; o.soft += L.soft;
+  149|       o.err = Math.max(o.err, L.maxErr); o.crouch += a.hero.crouch ?? 0; o.n++;
+  150|     }
+  151|     return { out, overlapFrames, minRatio, steps, count: s.agents.length, lifts, events };
+  152|   }, { dt: DT, steps: 900 });
+  153|   log(`  creatures ${free.count} | overlap frames ${free.overlapFrames}/${free.steps} | closest pair ${free.minRatio.toFixed(2)}x personal space`);
+  154|   for (const [sp, l] of Object.entries(free.lifts ?? {})) log(`  ${sp.padEnd(6)} lifts: beat ${l.beat} reach ${l.hard} strain ${l.strain} catch-up ${l.soft} | max planted IK miss ${(l.err * 100).toFixed(2)} cm | crouch ${(100 * l.crouch / Math.max(1, l.n)).toFixed(1)} cm`);
+  155|   log('\n## SLIP FORENSICS (stances that slid > 1 cm)');
+  156|   const ev = free.events ?? [];
+  157|   for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
+  158|     const e = ev.filter((x) => x.sp === sp);
+  159|     if (!e.length) { log(`  ${sp.padEnd(6)} none`); continue; }
+  160|     const pct = (f) => Math.round((100 * e.filter(f).length) / e.length);
+  161|     log(`  ${sp.padEnd(6)} n ${e.length} | in action ${pct((x) => x.busy)}% | one-frame pop ${pct((x) => x.jump > 0.5 * x.slip)}% | ended by forced lift ${pct((x) => x.cause === 'forced')}% | max hip-foot/reach ${Math.max(...e.map((x) => x.rr)).toFixed(2)} | max IK miss ${(100 * Math.max(...e.map((x) => x.err))).toFixed(1)} cm | max post-limiter miss ${(100 * Math.max(...e.map((x) => x.perr))).toFixed(1)} cm`);
+  162|   }
+  163|   for (const x of [...ev].sort((p, q) => q.slip - p.slip).slice(0, 8))
+  164|     log(`    ${x.sp} leg ${x.leg}: slip ${(x.slip * 100).toFixed(1)} jump ${(x.jump * 100).toFixed(1)} cm | reach ${x.rr.toFixed(2)} | IK ${(x.err * 100).toFixed(1)} post ${(x.perr * 100).toFixed(1)} cm | ${x.busy ? 'ACTION' : 'walk'} | ${x.cause}`);
+  165|   for (const [sp, o] of Object.entries(free.out)) if (o.legJ) log(`  ${sp.padEnd(6)} LEG joint max ${o.legJ.toFixed(1)} rad/s on ${o.legJBone} | leg frames >20: ${o.legJFrames ?? 0}`);
+  166|   for (const [sp, o] of Object.entries(free.out)) if (o.bodyJ) log(`  ${sp.padEnd(6)} BODY snap max ${o.bodyJ.toFixed(1)} rad/s (rendered) during '${o.bodyAct}' | raw target ${(o.rawMax ?? 0).toFixed(1)} rad/s during '${o.rawAct ?? '-'}' busy ${!!o.rawBusy} roll-over ${(o.rawPiv ?? 0).toFixed(2)} rad`);
+  167|   for (const [sp, o] of Object.entries(free.out)) if (o.wJctx) { const c = o.wJctx; log(`  ${sp.padEnd(6)} WALK joint peak ${o.wJ.toFixed(1)} on ${o.wJBone} | hip-foot/reach ${c.rr.toFixed(3)} | IK miss ${(c.err * 100).toFixed(2)} cm | since land ${c.landT.toFixed(2)} s | crouch step ${(c.cd * 100).toFixed(2)} cm | action '${c.act}' | lifted ${c.lifted} | kick ${c.kick} | knee BEND rate ${(c.bendR ?? 0).toFixed(1)} rad/s (rest of peak = twist) | pole fallback ${c.fb}`); }
+  168|   for (const [sp, o] of Object.entries(free.out)) {
+  169|     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
+  170|     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);
+  171|   }
+  172| });
+  173| 
+  174| // filmed strips with foot dots (red = planted, yellow = swinging)
+  175| await p.evaluate(() => {
+  176|   document.querySelectorAll('.sh-menu,.w-tools,.w-head,.w-hint,.w-species,.w-card,.w-simlog,.w-tags,.gs-build-badge').forEach((e) => { e.style.display = 'none'; });
+  177|   const c = document.createElement('canvas'); c.id = '__dots';
+  178|   c.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9';
+  179|   document.body.appendChild(c);
+  180|   window.__lab.stage.controls.enabled = false;
+  181| });
+  182| const drawDots = () => p.evaluate(() => {
+  183|   const s = window.__lab, c = document.getElementById('__dots'), r = s.stage.renderer.domElement;
+  184|   c.width = r.clientWidth; c.height = r.clientHeight;
+  185|   const ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height);
+  186|   for (const a of s.agents) {
+  187|     if (!a.handle.group.visible) continue;
+  188|     for (const f of a.feet) {
+  189|       const v = f.pos.clone().project(s.stage.camera); if (v.z > 1) continue;
+  190|       ctx.beginPath(); ctx.arc((v.x * 0.5 + 0.5) * c.width, (-v.y * 0.5 + 0.5) * c.height, 6, 0, 7);
+  191|       ctx.fillStyle = f.swinging ? '#ffd23f' : '#ff3b6b'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#101418'; ctx.stroke();
+  192|     }
+  193|   }
+  194| });
+  195| for (const sp of ['MOCHI', 'ZIK']) for (const mode of ['walk', 'turn', 'stop']) {
+  196|   await safe(`strip ${sp} ${mode}`, async () => {
+  197|     for (let f = 0; f < 12; f++) {
+  198|       await p.evaluate(({ sp, mode, f, dt }) => {
+  199|         const s = window.__lab; s.quiet(); s.testPose = 0;
+  200|         const a = s.agents.find((x) => x.template.name.toUpperCase().startsWith(sp)); if (!a) throw new Error('no ' + sp);
+  201|         for (const o of s.agents) o.handle.group.visible = (o === a);
+  202|         if (f === 0) {
+  203|           a.place(0, -6, 0); a.goTo({ x: 0, y: 0, z: 40 }, 0.7);
+  204|           for (let i = 0; i < 120; i++) s.step(dt);
+  205|           if (mode === 'turn') { a.stop(); a.faceTarget = { x: -40, z: -6 }; }
+  206|         }
+  207|         if (mode === 'stop' && f === 3) a.stop();
+  208|         for (let i = 0; i < 3; i++) s.step(dt);
+  209|         s.stage.update(0);
+  210|         const h = a.template.height;
+  211|         if (mode === 'walk') { s.stage.camera.position.set(a.pos.x + 2.3, a.pos.y + h * 0.5, a.pos.z + 0.2); s.stage.camera.lookAt(a.pos.x, a.pos.y + h * 0.45, a.pos.z); }
+  212|         else { s.stage.camera.position.set(a.pos.x + 2.1, a.pos.y + h * 0.62, a.pos.z + 2.1); s.stage.camera.lookAt(a.pos.x, a.pos.y + 0.3, a.pos.z); }
+  213|         s.stage.render(0);
+  214|       }, { sp, mode, f, dt: DT });
+  215|       await drawDots();
+  216|       await p.screenshot({ path: `${OUT}/frames/${sp}_${mode}_${String(f).padStart(2, '0')}.png` });
+  217|     }
+  218|   });
+  219| }
+  220| 
+  221| log('\n## VERDICT');
+  222| for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) {
+  223|   const o = free?.out?.[sp]; if (!o) { log(`  ${sp}: no data`); continue; }
+  224|   const feet = (o.stances ?? 0) === 0 ? 'no steps seen' : (o.worst ?? 0) <= 0.01 ? 'STAY PUT' : `SLIDE (worst ${(o.worst * 100).toFixed(1)} cm, ${Math.round(100 * o.bad / o.stances)}% of steps)`;
+  225|   const kr = Math.max(o.joint ?? 0, joint[sp]?.rate ?? 0);
+  226|   const knees = kr <= 20 ? 'OK' : `SNAP (${kr.toFixed(0)} rad/s)`;
+  227|   log(`  ${sp.padEnd(6)} feet ${feet} | knees ${knees}`);
+  228| }
+  229| if (free) log(`  overlap ${free.overlapFrames === 0 ? 'NONE' : `${free.overlapFrames} frames`}`);
+  230| log(`  console errors ${errs.length}`);
+  231| for (const e of errs.slice(0, 8)) log('    ' + e.slice(0, 240));
+  232| 
+  233| log('\n## SAVE / LOAD');
+  234| let saveOK = false;
+  235| await safe('save', async () => {
+  236|   const r = await p.evaluate(() => {
+  237|     const s = window.__lab;
+  238|     const key = (list) => list.map((a) => `${s.heroIdOf(a)}:${a.pos.x.toFixed(2)},${a.pos.z.toFixed(2)}:${a.dna.scale.toFixed(3)}`).sort().join('|');
+  239|     const before = key(s.agents);
+  240|     const json = s.saveState();
+  241|     const ok = s.loadState(json);
+  242|     return { ok, n: s.agents.length, bytes: json.length, same: before === key(s.agents) };
+  243|   });
+  244|   saveOK = r.ok && r.same;
+  245|   log(`  creatures ${r.n} | save ${r.bytes} bytes | reload identical ${r.same}`);
+  246| });
+  247| 
+  248| log('\n## SIM COST (CPU only, no render)');
+  249| const perf = {};
+  250| await safe('perf', async () => {

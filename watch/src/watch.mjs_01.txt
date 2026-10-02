@@ -1,0 +1,60 @@
+  251|   const r = await p.evaluate((dt) => {
+  252|     const s = window.__lab; s.loud();
+  253|     let bd = null;
+  254|     const AG = s.agents[0] ? s.agents[0].constructor : null;
+  255|     const time = () => {
+  256|       for (let i = 0; i < 30; i++) s.step(dt);
+  257|       s.prof.brain = 0; s.prof.agent = 0; if (AG) { AG.legMs = 0; AG.preMs = 0; AG.animMs = 0; AG.postMs = 0; }
+  258|       const t0 = performance.now();
+  259|       for (let i = 0; i < 120; i++) s.step(dt);
+  260|       const tot = performance.now() - t0;
+  261|       const legs = AG ? AG.legMs : 0;
+  262|       bd = { brain: s.prof.brain / 120, motion: (s.prof.agent - legs) / 120, legs: legs / 120, other: (tot - s.prof.brain - s.prof.agent) / 120,
+  263|         pre: AG ? AG.preMs / 120 : 0, anim: AG ? AG.animMs / 120 : 0, post: AG ? AG.postMs / 120 : 0 };
+  264|       return tot / 120;
+  265|     };
+  266|     const n0 = s.agents.length; const m0 = time();
+  267|     const base = [...s.agents];
+  268|     for (let i = 0; i < 16; i++) s.spawn(s.heroIdOf(base[i % base.length]), null, true);
+  269|     const n1 = s.agents.length; const m1 = time();
+  270|     return { n0, m0, n1, m1, bd };
+  271|   }, DT);
+  272|   Object.assign(perf, r);
+  273|   log(`  ${r.n0} creatures ${r.m0.toFixed(2)} ms/step | ${r.n1} creatures ${r.m1.toFixed(2)} ms/step | ${(r.m1 / r.n1).toFixed(3)} ms per creature`);
+  274|   if (r.bd) log(`  breakdown @${r.n1}: brain ${r.bd.brain.toFixed(2)} | motion+anim ${r.bd.motion.toFixed(2)} | leg solve ${r.bd.legs.toFixed(2)} | other ${r.bd.other.toFixed(2)} ms/step`);
+  275|   if (r.bd) log(`  motion+anim split: preAnimate ${r.bd.pre.toFixed(2)} | HeroAnimator ${r.bd.anim.toFixed(2)} | postAnimate ${r.bd.post.toFixed(2)} | rest of Agent ${(r.bd.motion - r.bd.pre - r.bd.anim - r.bd.post).toFixed(2)} ms/step`);
+  276| });
+  277| 
+  278| log('\n## RENDER BUDGET (one frame, home camera; counts matter, not ms)');
+  279| await safe('render', async () => {
+  280|   const ri = await p.evaluate(() => {
+  281|     const s = window.__lab, r = s.stage.renderer, inf = r.info;
+  282|     for (const a of s.agents) a.handle.group.visible = true;
+  283|     s.stage.camera.position.set(0.4, 8.4, 14.2); s.stage.camera.lookAt(0, 0.6, 0);
+  284|     const ar = inf.autoReset; inf.autoReset = false; inf.reset();
+  285|     s.renderOnce();
+  286|     const out = { n: s.agents.length, calls: inf.render.calls, tris: inf.render.triangles, geos: inf.memory.geometries, tex: inf.memory.textures, progs: (inf.programs || []).length };
+  287|     inf.autoReset = ar;
+  288|     return out;
+  289|   });
+  290|   log(`  ${ri.n} creatures | draw calls ${ri.calls} | triangles ${ri.tris} | geometries ${ri.geos} | textures ${ri.tex} | shader programs ${ri.progs}`);
+  291| });
+  292| 
+  293| log('\n## GATES');
+  294| const gate = (name, ok, val) => log(`  ${ok ? 'PASS' : 'FAIL'}  ${name.padEnd(30)} ${val}`);
+  295| for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
+  296|   const o = free?.out?.[sp]; if (!o) continue;
+  297|   const pct = o.stances ? (100 * o.bad) / o.stances : 0;
+  298|   const wpct = o.wSt ? (100 * (o.wBad ?? 0)) / o.wSt : 0;
+  299|   gate(`${sp} WALK worst slip <= 2 cm`, (o.wWorst ?? 0) <= 0.02, `${((o.wWorst ?? 0) * 100).toFixed(2)} cm (${o.wSt ?? 0} walk steps)`);
+  300|   gate(`${sp} WALK steps >1 cm <= 2%`, wpct <= 2, `${wpct.toFixed(1)}%`);
+  301|   gate(`${sp} WALK leg joint <= 20 rad/s`, (o.wJ ?? 0) <= 20, `${(o.wJ ?? 0).toFixed(1)} on ${o.wJBone ?? '-'}`);
+  302|   log(`  WARN  ${(sp + ' in actions').padEnd(30)} worst ${((o.worst ?? 0) * 100).toFixed(1)} cm | ${pct.toFixed(1)}% steps | leg joint ${(o.legJ ?? 0).toFixed(1)} | body ${(o.bodyJ ?? 0).toFixed(0)} rad/s '${o.bodyAct ?? '-'}'`);
+  303| }
+  304| for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) { const o = free?.out?.[sp]; if (o) gate(`${sp} BODY snap <= 20 rad/s`, (o.bodyJ ?? 0) <= 20, `${(o.bodyJ ?? 0).toFixed(1)} during '${o.bodyAct ?? '-'}'`); }
+  305| gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
+  306| gate('console errors = 0', errs.length === 0, errs.length);
+  307| gate('save/load identical', saveOK, saveOK ? 'yes' : 'no');
+  308| gate('sim cost scales linearly', perf.m1 !== undefined && perf.m1 <= 3.6 * perf.m0, perf.m1 !== undefined ? `${(perf.m1 / perf.m0).toFixed(2)}x for 3x creatures` : '-');
+  309| writeFileSync(`${OUT}/REPORT.md`, '```\n' + L.join('\n') + '\n```\n');
+  310| await b.close();

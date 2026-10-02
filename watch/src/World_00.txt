@@ -1,0 +1,130 @@
+    1| /**
+    2|  * The island as a system: day and night, the spatial hash every neighbour query
+    3|  * goes through, and the one place an Agent registers itself. Nothing in here
+    4|  * knows what a creature looks like.
+    5|  */
+    6| import * as THREE from 'three';
+    7| import { Stage, DAY_SECONDS } from '../scene/Stage';
+    8| import { Props } from './props';
+    9| import { WALK_R, ISLAND_R, heightAt, isDry } from './terrain';
+   10| import { MAT } from '../render/hero/materials';
+   11| 
+   12| export interface HashEntry {
+   13|   id: number;
+   14|   pos: THREE.Vector3;
+   15|   /** bigger creatures intimidate smaller ones */
+   16|   bulk: number;
+   17|   alive: boolean;
+   18| }
+   19| 
+   20| const CELL = 3.2;
+   21| 
+   22| export class World {
+   23|   readonly stage: Stage;
+   24|   readonly props = new Props();
+   25|   /** 0..1 through the day. Starts mid-morning so the first impression is bright. */
+   26|   day = 0.40;
+   27|   agents: HashEntry[] = [];
+   28|   /** set by the sim log so headless runs can be replayed exactly */
+   29|   elapsed = 0;
+   30|   private cells = new Map<string, HashEntry[]>();
+   31| 
+   32|   constructor(stage: Stage) {
+   33|     this.stage = stage;
+   34|     stage.scene.add(this.props.group);
+   35|     stage.setDayNight(this.day);
+   36|   }
+   37| 
+   38|   get isNight(): boolean { return this.day < 0.22 || this.day > 0.80; }
+   39|   /** 0 = wide awake, 1 = deep night */
+   40|   get nightness(): number {
+   41|     const d = this.day;
+   42|     if (d > 0.24 && d < 0.78) return 0;
+   43|     const edge = d <= 0.24 ? (0.24 - d) / 0.24 : (d - 0.78) / 0.22;
+   44|     return Math.min(1, Math.max(0, edge));
+   45|   }
+   46| 
+   47|   update(dt: number): void {
+   48|     this.elapsed += dt;
+   49|     this.day = (this.day + dt / DAY_SECONDS) % 1;
+   50|     this.stage.setDayNight(this.day);
+   51|     // Night fix: outlines are unlit and the rim is additive, so both glowed like
+   52|     // neon after dark. Dim them with the night; daytime (nightness 0) is unchanged.
+   53|     // nightness only peaks at midnight, but the sky is dark by dusk: ramp ~3x faster
+   54|     const n0 = this.nightness;
+   55|     const n = n0 >= 0.35 ? 1 : (n0 / 0.35) * (n0 / 0.35) * (3 - 2 * (n0 / 0.35));
+   56|     if (MAT.built) {
+   57|       MAT.outline.color.setScalar(1 - 0.75 * n);
+   58|       MAT.rimStrength.value = 0.30 * (1 - 0.85 * n);
+   59|     }
+   60|     this.props.update(dt);
+   61|     this.rebuildHash();
+   62|   }
+   63| 
+   64|   private rebuildHash(): void {
+   65|     this.cells.clear();
+   66|     for (const a of this.agents) {
+   67|       if (!a.alive) continue;
+   68|       const key = cellKey(a.pos.x, a.pos.z);
+   69|       const arr = this.cells.get(key);
+   70|       if (arr) arr.push(a);
+   71|       else this.cells.set(key, [a]);
+   72|     }
+   73|   }
+   74| 
+   75|   /** Every live creature within `radius` of a point, via the 3x3 cell block. */
+   76|   nearby(pos: THREE.Vector3, radius: number, exclude?: number): HashEntry[] {
+   77|     const out: HashEntry[] = [];
+   78|     const span = Math.ceil(radius / CELL);
+   79|     const cx = Math.floor(pos.x / CELL);
+   80|     const cz = Math.floor(pos.z / CELL);
+   81|     for (let i = -span; i <= span; i++) {
+   82|       for (let j = -span; j <= span; j++) {
+   83|         const arr = this.cells.get(`${cx + i},${cz + j}`);
+   84|         if (!arr) continue;
+   85|         for (const a of arr) {
+   86|           if (!a.alive || a.id === exclude) continue;
+   87|           if (a.pos.distanceTo(pos) <= radius) out.push(a);
+   88|         }
+   89|       }
+   90|     }
+   91|     return out;
+   92|   }
+   93| 
+   94|   nearest(pos: THREE.Vector3, radius: number, exclude?: number): HashEntry | null {
+   95|     let best: HashEntry | null = null;
+   96|     let bestD = radius;
+   97|     for (const a of this.nearby(pos, radius, exclude)) {
+   98|       const d = a.pos.distanceTo(pos);
+   99|       if (d < bestD) { bestD = d; best = a; }
+  100|     }
+  101|     return best;
+  102|   }
+  103| 
+  104|   /** A random patch of dry land, used by wander / spawn / flee. */
+  105|   randomSpot(rng: () => number, near?: THREE.Vector3, spread = 5): THREE.Vector3 {
+  106|     for (let i = 0; i < 40; i++) {
+  107|       const a = rng() * Math.PI * 2;
+  108|       const rr = Math.sqrt(rng()) * WALK_R * 0.92;
+  109|       let x = Math.cos(a) * rr;
+  110|       let z = Math.sin(a) * rr;
+  111|       if (near) {
+  112|         x = near.x + (rng() - 0.5) * spread * 2;
+  113|         z = near.z + (rng() - 0.5) * spread * 2;
+  114|       }
+  115|       if (Math.hypot(x, z) > WALK_R * 0.96) continue;
+  116|       if (!isDry(x, z)) continue;
+  117|       return new THREE.Vector3(x, heightAt(x, z), z);
+  118|     }
+  119|     return new THREE.Vector3(0, heightAt(0, 0), 0);
+  120|   }
+  121| 
+  122|   /** The one true ground query for anything that walks. */
+  123|   ground(x: number, z: number): number { return heightAt(x, z); }
+  124| 
+  125|   get islandRadius(): number { return ISLAND_R; }
+  126| }
+  127| 
+  128| function cellKey(x: number, z: number): string {
+  129|   return `${Math.floor(x / CELL)},${Math.floor(z / CELL)}`;
+  130| }

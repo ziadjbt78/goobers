@@ -1,0 +1,250 @@
+    1| /**
+    2|  * Stage — the room the heroes stand in.
+    3|  * Sky with a real horizon, graded ground, one round pedestal per hero, and a
+    4|  * soft blob contact shadow painted onto each pedestal top. All of it is
+    5|  * vertex-coloured and drawn with the single flat material, so it costs no extra
+    6|  * shader program.
+    7|  */
+    8| import * as THREE from 'three';
+    9| import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+   10| import { MAT } from '../render/hero/materials';
+   11| import { stats } from '../core/stats';
+   12| 
+   13| const SKY_TOP = new THREE.Color('#4a92e0');
+   14| const SKY_MID = new THREE.Color('#a8d4f0');
+   15| const SKY_HORIZON = new THREE.Color('#f3e2c4');
+   16| // The far ground is underwater now: the toon sea reaches the horizon, so the
+   17| // old green/brown outer ring is gone and the horizon reads as open water.
+   18| const GROUND_NEAR = new THREE.Color('#8fdccb');
+   19| const GROUND_FAR = new THREE.Color('#2f6fb0');
+   20| 
+   21| /** Reverse triangle winding: a dome must face INWARD to be seen from inside. */
+   22| function flipWinding(geo: THREE.BufferGeometry): THREE.BufferGeometry {
+   23|   const idx = geo.getIndex();
+   24|   if (!idx) return geo;
+   25|   const a = idx.array as Uint16Array | Uint32Array;
+   26|   for (let i = 0; i < a.length; i += 3) { const t = a[i]; a[i] = a[i + 2]; a[i + 2] = t; }
+   27|   idx.needsUpdate = true;
+   28|   return geo;
+   29| }
+   30| 
+   31| /** Seconds in one full day. Four minutes, as specified. */
+   32| export const DAY_SECONDS = 240;
+   33| 
+   34| function paintVertices(geo: THREE.BufferGeometry, fn: (x: number, y: number, z: number, out: THREE.Color) => void): THREE.BufferGeometry {
+   35|   const p = geo.getAttribute('position');
+   36|   const col = new Float32Array(p.count * 3);
+   37|   const c = new THREE.Color();
+   38|   for (let i = 0; i < p.count; i++) {
+   39|     fn(p.getX(i), p.getY(i), p.getZ(i), c);
+   40|     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+   41|   }
+   42|   geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+   43|   return geo;
+   44| }
+   45| 
+   46| export class Stage {
+   47|   readonly renderer: THREE.WebGLRenderer;
+   48|   readonly scene: THREE.Scene;
+   49|   readonly camera: THREE.PerspectiveCamera;
+   50|   readonly controls: OrbitControls;
+   51|   contextLost = false;
+   52| 
+   53|   private sky: THREE.Mesh;
+   54|   private skyMat!: THREE.MeshBasicMaterial;
+   55|   private stars!: THREE.Points;
+   56|   private starsMat!: THREE.PointsMaterial;
+   57|   /** the far meadow owns its material so night can dim it with the sky */
+   58|   private groundMat!: THREE.MeshBasicMaterial;
+   59|   /** a solid dome that fades in after dark so the horizon band cannot stay bright */
+   60|   private nightDome!: THREE.Mesh;
+   61|   private nightMat!: THREE.MeshBasicMaterial;
+   62|   private hemi!: THREE.HemisphereLight;
+   63|   private keyLight!: THREE.DirectionalLight;
+   64|   private fillLight!: THREE.DirectionalLight;
+   65|   private bounceLight!: THREE.DirectionalLight;
+   66|   /** 0..1 through the day: 0 midnight, 0.25 dawn, 0.5 noon, 0.75 dusk */
+   67|   day = 0.5;
+   68|   private ground: THREE.Mesh;
+   69|   private pedestals: THREE.Mesh[] = [];
+   70|   private onLost?: (m: string) => void;
+   71|   private onRestored?: () => void;
+   72| 
+   73|   constructor(canvas: HTMLCanvasElement) {
+   74|     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance', stencil: false });
+   75|     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+   76|     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+   77|     this.renderer.toneMappingExposure = 1.05;
+   78|     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+   79|     this.renderer.shadowMap.enabled = false;
+   80|     this.renderer.setClearColor(new THREE.Color('#a8d4f0'), 1);
+   81| 
+   82|     this.scene = new THREE.Scene();
+   83| 
+   84|     this.camera = new THREE.PerspectiveCamera(35, 16 / 9, 0.05, 300);
+   85|     this.camera.position.set(2.45, 1.10, 5.55);
+   86| 
+   87|     this.controls = new OrbitControls(this.camera, canvas);
+   88|     this.controls.target.set(0, 0.52, 0);
+   89|     this.controls.enableDamping = true;
+   90|     this.controls.dampingFactor = 0.08;
+   91|     this.controls.minDistance = 1.2;
+   92|     this.controls.maxDistance = 30;
+   93|     this.controls.maxPolarAngle = Math.PI * 0.495;
+   94|     this.controls.update();
+   95| 
+   96|     // ---- lighting: warm key, cool fill, hemisphere sky/ground --------------
+   97|     this.hemi = new THREE.HemisphereLight(new THREE.Color('#bfe0ff'), new THREE.Color('#7fa855'), 1.15);
+   98|     this.scene.add(this.hemi);
+   99|     this.keyLight = new THREE.DirectionalLight(new THREE.Color('#fff2d8'), 1.55);
+  100|     this.keyLight.position.set(4.2, 6.5, 5.0);
+  101|     this.scene.add(this.keyLight);
+  102|     this.fillLight = new THREE.DirectionalLight(new THREE.Color('#c6d8ff'), 0.55);
+  103|     this.fillLight.position.set(-5.0, 2.6, -3.4);
+  104|     this.scene.add(this.fillLight);
+  105|     this.bounceLight = new THREE.DirectionalLight(new THREE.Color('#e8f0c0'), 0.25);
+  106|     this.bounceLight.position.set(0, -3, 1.5);
+  107|     this.scene.add(this.bounceLight);
+  108| 
+  109|     // ---- sky dome with a visible horizon -----------------------------------
+  110|     const skyGeo = flipWinding(new THREE.SphereGeometry(120, 48, 28));
+  111|     paintVertices(skyGeo, (_x, y, _z, out) => {
+  112|       const h = y / 120;
+  113|       if (h > 0.04) out.copy(SKY_MID).lerp(SKY_TOP, Math.min(1, (h - 0.04) / 0.62));
+  114|       else if (h > 0) out.copy(SKY_HORIZON).lerp(SKY_MID, h / 0.04);
+  115|       else out.copy(SKY_HORIZON).lerp(GROUND_FAR, Math.min(1, -h / 0.35));
+  116|     });
+  117|     // the sky owns its material so day/night can tint it without recolouring
+  118|     // the ground, which shares the same program
+  119|     this.skyMat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: false });
+  120|     this.sky = new THREE.Mesh(skyGeo, this.skyMat);
+  121|     this.sky.frustumCulled = false;
+  122|     this.scene.add(this.sky);
+  123| 
+  124|     // ---- star field: only exists after dark, so night reads as night -------
+  125|     const nStars = 700;
+  126|     const sPos = new Float32Array(nStars * 3);
+  127|     for (let i = 0; i < nStars; i++) {
+  128|       // upper hemisphere only, biased away from the horizon band
+  129|       const u = Math.random(), v = Math.random();
+  130|       const theta = Math.acos(0.10 + u * 0.90);
+  131|       const phi = v * Math.PI * 2;
+  132|       sPos[i * 3] = Math.sin(theta) * Math.cos(phi) * 118;
+  133|       sPos[i * 3 + 1] = Math.cos(theta) * 118;
+  134|       sPos[i * 3 + 2] = Math.sin(theta) * Math.sin(phi) * 118;
+  135|     }
+  136|     const sGeo = new THREE.BufferGeometry();
+  137|     sGeo.setAttribute('position', new THREE.BufferAttribute(sPos, 3));
+  138|     this.starsMat = new THREE.PointsMaterial({ color: 0xe6eeff, size: 3.0, sizeAttenuation: false, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  139|     this.stars = new THREE.Points(sGeo, this.starsMat);
+  140|     this.stars.frustumCulled = false;
+  141|     this.stars.renderOrder = 3;
+  142|     this.scene.add(this.stars);
+  143| 
+  144|     // ---- night dome: a solid deep-blue shell drawn over the graded sky -------
+  145|     // The day sky's horizon band is a pale warm colour; multiplying it by a dark
+  146|     // tint yields muddy olive-green, so after dark a flat shell covers it. The
+  147|     // day look is untouched (opacity 0); stars sit inside it and draw on top.
+  148|     const ndGeo = flipWinding(new THREE.SphereGeometry(119, 32, 20));
+  149|     this.nightMat = new THREE.MeshBasicMaterial({ color: 0x0a1230, transparent: true, opacity: 0, depthWrite: false, fog: false });
+  150|     this.nightDome = new THREE.Mesh(ndGeo, this.nightMat);
+  151|     this.nightDome.frustumCulled = false;
+  152|     this.nightDome.renderOrder = 2;
+  153|     this.scene.add(this.nightDome);
+  154| 
+  155|     // ---- graded ground -----------------------------------------------------
+  156|     this.groundMat = MAT.flat.clone();
+  157|     const gGeo = new THREE.CircleGeometry(90, 96, 1);
+  158|     paintVertices(gGeo, (x, _y, z, out) => {
+  159|       const d = Math.min(1, Math.hypot(x, z) / 34);
+  160|       out.copy(GROUND_NEAR).lerp(GROUND_FAR, d * d);
+  161|     });
+  162|     this.ground = new THREE.Mesh(gGeo, this.groundMat);
+  163|     this.ground.rotation.x = -Math.PI / 2;
+  164|     this.ground.position.y = -0.42;
+  165|     this.ground.frustumCulled = false;
+  166|     this.scene.add(this.ground);
+  167|   }
+  168| 
+  169|   /**
+  170|    * Push the whole rig through the day. Lights AND the sky tint move together,
+  171|    * so dawn is warm on the ground as well as on the horizon.
+  172|    */
+  173|   setDayNight(t: number): void {
+  174|     this.day = ((t % 1) + 1) % 1;
+  175|     // 0 midnight, 0.25 sunrise, 0.5 noon, 0.75 sunset
+  176|     const sunHeight = Math.sin((this.day - 0.25) * Math.PI * 2); // -1..1
+  177|     const day01 = Math.max(0, Math.min(1, (sunHeight + 0.22) / 0.9));
+  178|     const dusk = Math.max(0, 1 - Math.abs(sunHeight) * 2.2);
+  179| 
+  180|     const keyCol = new THREE.Color('#fff2d8').lerp(new THREE.Color('#ff9c5a'), dusk * 0.85);
+  181|     this.keyLight.color.copy(keyCol);
+  182|     this.keyLight.intensity = 0.28 + day01 * 1.32;
+  183|     this.keyLight.position.set(Math.cos(this.day * Math.PI * 2) * 6.5, 2.0 + day01 * 6.0, 4.6 - this.day * 3.0);
+  184| 
+  185|     this.hemi.color.copy(new THREE.Color('#1c2540').lerp(new THREE.Color('#bfe0ff'), day01));
+  186|     this.hemi.groundColor.copy(new THREE.Color('#1a2418').lerp(new THREE.Color('#7fa855'), day01));
+  187|     this.hemi.intensity = 0.52 + day01 * 0.68;
+  188| 
+  189|     this.fillLight.color.set('#c6d8ff');
+  190|     this.fillLight.intensity = 0.18 + day01 * 0.40;
+  191|     this.fillLight.position.set(-5.0, 2.6, -3.4 + Math.sin(this.day * Math.PI * 2) * 3);
+  192|     this.bounceLight.intensity = 0.06 + day01 * 0.20;
+  193| 
+  194|     // the sky dims rather than going black, so the night still reads as a place
+  195|     const skyTint = new THREE.Color('#0e1733').lerp(new THREE.Color('#ffffff'), Math.pow(day01, 0.8));
+  196|     this.skyMat.color.copy(skyTint);
+  197|     // the distant meadow dims with it, otherwise night is a bright green field
+  198|     this.groundMat.color.copy(new THREE.Color('#5c6a92').lerp(new THREE.Color('#ffffff'), Math.pow(day01, 0.7)));
+  199|     // stars fade in as the sun goes down and are gone by mid-morning
+  200|     this.starsMat.opacity = Math.max(0, 1 - day01 * 3.2) * 0.95;
+  201|     this.nightMat.opacity = Math.max(0, 1 - day01 * 2.4) * 0.92;
+  202|     this.renderer.toneMappingExposure = 0.74 + day01 * 0.31;
+  203|   }
+  204| 
+  205|   /** How many pedestals exist, so a grid can grow in place. */
+  206|   pedestalCount(): number { return this.pedestals.length; }
+  207| 
+  208|   /** Move the default camera, for pages that frame a grid instead of a line. */
+  209|   setHome(pos: THREE.Vector3, target: THREE.Vector3): void {
+  210|     this.camera.position.copy(pos);
+  211|     this.controls.target.copy(target);
+  212|     this.controls.update();
+  213|   }
+  214| 
+  215|   /** A round pedestal with a painted contact shadow on its top face. */
+  216|   addPedestal(x: number, z: number, radius: number, tint: THREE.Color): void {
+  217|     const h = 0.16;
+  218|     const geo = new THREE.CylinderGeometry(radius, radius * 1.06, h, 48, 3, false);
+  219|     paintVertices(geo, (px, py, _pz, out) => {
+  220|       const r = Math.hypot(px, _pz) / radius;
+  221|       const top = py > 0;
+  222|       if (top) {
+  223|         const shade = THREE.MathUtils.smoothstep(r, 0.12, 1.0);
+  224|         out.copy(tint).multiplyScalar(0.42 + shade * 0.58);
+  225|       } else {
+  226|         out.copy(tint).multiplyScalar(0.30 + (1 - r) * 0.10);
+  227|       }
+  228|     });
+  229|     const m = new THREE.Mesh(geo, MAT.flat);
+  230|     m.position.set(x, -h * 0.5 + 0.002, z);
+  231|     this.pedestals.push(m);
+  232|     this.scene.add(m);
+  233|   }
+  234| 
+  235|   /** Re-tint the pedestals so each hero sits on its own colour. */
+  236|   setPedestalTint(i: number, c: THREE.Color): void {
+  237|     const m = this.pedestals[i];
+  238|     if (!m) return;
+  239|     const geo = m.geometry;
+  240|     geo.computeBoundingBox();
+  241|     const bbox = geo.boundingBox as THREE.Box3;
+  242|     const radius = Math.max(bbox.max.x, bbox.max.z);
+  243|     paintVertices(geo, (px, py, pz, out) => {
+  244|       const r = Math.hypot(px, pz) / radius;
+  245|       if (py > 0) out.copy(c).multiplyScalar(0.42 + THREE.MathUtils.smoothstep(r, 0.12, 1.0) * 0.58);
+  246|       else out.copy(c).multiplyScalar(0.30 + (1 - r) * 0.10);
+  247|     });
+  248|     (geo.getAttribute('color') as THREE.BufferAttribute).needsUpdate = true;
+  249|   }
+  250| 
