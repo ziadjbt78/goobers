@@ -1,67 +1,74 @@
- 1001|     h.mouth.visible = open <= 0.06;
- 1002|     if (h.mouthOpen.visible) {
- 1003|       const w = f.mouthWide;
- 1004|       // cheeks puff 20% on a chomp: the open mouth and the blush both swell
- 1005|       h.mouthOpen.scale.set(w * (1 + open * 0.15), (0.6 + open * 0.75) * (1 + open * 0.12), 1 * (1 + open * 0.2));
- 1006|     }
- 1007|     if (h.mouth.visible) {
- 1008|       h.mouth.scale.set(f.mouthWide, 1 - (1 - f.mouthWide) * 0.5 + (sad ? -0.25 : 0), 1);
- 1009|       h.mouth.rotation.z = -Math.PI * 0.5 - 1.55 * 0.5 + (sad ? 0.5 : 0);
- 1010|     }
- 1011|     for (const b of h.blush) b.scale.setScalar(0.85 + f.blush * 0.55 + open * 0.08);
- 1012|     void act;
- 1013|   }
- 1014| 
- 1015|   /** Per-species locomotion flavour, keyed off the template NAME: PIP and
- 1016|    *  MOCHI share the `walk` tag but must move completely differently. */
- 1017|   private _gaitFlavour(loco: number, speed01: number): { roll: number; spine: number; headPitch: number } {
- 1018|     const t = this.template;
- 1019|     if (loco <= 0.001) return { roll: 0, spine: 0, headPitch: 0 };
- 1020|     const s = Math.sin(this.phase * Math.PI * 2);
- 1021|     const key = (t.name || '').toUpperCase();
- 1022|     if (key.startsWith('PIP') || t.locomotion === 'walk') {
- 1023|       // PIP waddle: hard side-to-side sway, shoulders roll, head counter-sways
- 1024|       return { roll: s * 0.24 * loco * (0.45 + speed01 * 0.55), spine: 0.11 * loco, headPitch: 0 };
- 1025|     }
- 1026|     if (key.startsWith('MOCHI')) {
- 1027|       return { roll: Math.sin(this.phase * Math.PI * 4) * 0.05 * loco, spine: 0.19 * loco, headPitch: -0.05 * speed01 };
- 1028|     }
- 1029|     if (t.locomotion === 'skitter') {
- 1030|       // ZIK alternating-tripod: low body, quick shimmy, head holds still
- 1031|       return { roll: s * 0.07 * loco, spine: -0.05 * loco, headPitch: -0.06 * loco };
+ 1001|         // angry/sad tilt: inner end up for sad, down for angry
+ 1002|         e.brow.rotation.z = (sad * -0.30 + (this.mood === 'scared' ? 0.25 : 0)) * (e.side >= 0 ? 1 : -1);
+ 1003|       }
+ 1004|     }
+ 1005| 
+ 1006|     const open = f.mouthOpen;
+ 1007|     h.mouthOpen.visible = open > 0.06;
+ 1008|     h.mouth.visible = open <= 0.06;
+ 1009|     if (h.mouthOpen.visible) {
+ 1010|       const w = f.mouthWide;
+ 1011|       // cheeks puff 20% on a chomp: the open mouth and the blush both swell
+ 1012|       h.mouthOpen.scale.set(w * (1 + open * 0.15), (0.6 + open * 0.75) * (1 + open * 0.12), 1 * (1 + open * 0.2));
+ 1013|     }
+ 1014|     if (h.mouth.visible) {
+ 1015|       h.mouth.scale.set(f.mouthWide, 1 - (1 - f.mouthWide) * 0.5 + (sad ? -0.25 : 0), 1);
+ 1016|       h.mouth.rotation.z = -Math.PI * 0.5 - 1.55 * 0.5 + (sad ? 0.5 : 0);
+ 1017|     }
+ 1018|     for (const b of h.blush) b.scale.setScalar(0.85 + f.blush * 0.55 + open * 0.08);
+ 1019|     void act;
+ 1020|   }
+ 1021| 
+ 1022|   /** Per-species locomotion flavour, keyed off the template NAME: PIP and
+ 1023|    *  MOCHI share the `walk` tag but must move completely differently. */
+ 1024|   private _gaitFlavour(loco: number, speed01: number): { roll: number; spine: number; headPitch: number } {
+ 1025|     const t = this.template;
+ 1026|     if (loco <= 0.001) return { roll: 0, spine: 0, headPitch: 0 };
+ 1027|     const s = Math.sin(this.phase * Math.PI * 2);
+ 1028|     const key = (t.name || '').toUpperCase();
+ 1029|     if (key.startsWith('PIP') || t.locomotion === 'walk') {
+ 1030|       // PIP waddle: hard side-to-side sway, shoulders roll, head counter-sways
+ 1031|       return { roll: s * 0.24 * loco * (0.45 + speed01 * 0.55), spine: 0.11 * loco, headPitch: 0 };
  1032|     }
- 1033|     if (t.locomotion === 'hop') return { roll: 0, spine: 0, headPitch: 0 };
- 1034|     return { roll: s * 0.08 * loco, spine: 0.09 * loco, headPitch: 0 };
- 1035|   }
- 1036| 
- 1037|   /** Additive action poses, all in body-local radians / metres. */
- 1038|   private _actionPose(id: ActionId, time: number): { pitch: number; lift: number; squash: number; roll: number } {
- 1039|     const e = Math.min(1, time / 0.22);
- 1040|     const osc = Math.sin(time * 9);
- 1041|     const R = { pitch: 0, lift: 0, squash: 1, roll: 0 };
- 1042|     switch (id) {
- 1043|       // eat: dip the head, then chomp — the mouth itself is driven by _updateFace
- 1044|       case 'eat': return { ...R, pitch: e * 0.40 + osc * 0.07, lift: -e * 0.03, squash: 1 + osc * 0.05 };
- 1045|       case 'chomp': return { ...R, pitch: e * 0.44 + Math.sin(time * 22) * 0.05, lift: -e * 0.03, squash: 1 + Math.sin(time * 22) * 0.055 };
- 1046|       case 'sniff': return { ...R, pitch: e * 0.46 + Math.sin(time * 7) * 0.07, lift: -e * 0.03, squash: 1 };
- 1047|       case 'play': return { ...R, pitch: -e * 0.12, lift: Math.abs(Math.sin(time * 5)) * e * 0.10, squash: 1 + Math.sin(time * 5) * 0.10, roll: Math.sin(time * 4) * 0.10 * e };
- 1048|       case 'pet': return { ...R, pitch: e * 0.14, lift: -e * 0.02, squash: 1 + Math.sin(time * 8) * 0.05 };
- 1049|       // roll onto the back: a big roll plus a drop, held for the stroke
- 1050|       case 'petRoll': {
- 1051|         const u = Math.min(1, time / 0.35);
- 1052|         return { pitch: -u * 0.55, lift: -u * 0.06, squash: 1 + Math.sin(time * 6) * 0.06, roll: u * 2.3 };
- 1053|       }
- 1054|       case 'sleep': return { ...R, pitch: e * 0.34, lift: -e * 0.07, squash: 1 - e * 0.08 };
- 1055|       case 'greet': return { ...R, pitch: -e * 0.10, lift: Math.abs(Math.sin(time * 7)) * e * 0.09, squash: 1 + Math.sin(time * 7) * 0.05 };
- 1056|       case 'wave': return { ...R, pitch: -e * 0.06, lift: Math.abs(Math.sin(time * 8)) * e * 0.05, squash: 1 };
- 1057|       case 'startle': return { ...R, pitch: -e * 0.22, lift: e * 0.07, squash: 1 - e * 0.08 };
- 1058|       case 'dig': return { ...R, pitch: e * 0.46 + Math.sin(time * 12) * 0.10, lift: -e * 0.04, squash: 1 };
- 1059|       case 'splash': return { ...R, pitch: e * 0.18, lift: Math.abs(Math.sin(time * 14)) * e * 0.05, squash: 1 };
- 1060|       case 'swim': return { ...R, pitch: e * 0.06, lift: Math.sin(time * 3) * e * 0.03, squash: 1 };
- 1061|       case 'fly': return { ...R, pitch: -e * 0.14, lift: Math.sin(time * 6) * e * 0.05, squash: 1 };
- 1062|       case 'perch': return { ...R, pitch: e * 0.06, squash: 1 };
- 1063|       case 'carry': return { ...R, pitch: Math.sin(time * 7) * 0.14, squash: 1.12, roll: Math.sin(time * 5) * 0.12 };
- 1064|       default: return R;
- 1065|     }
- 1066|   }
- 1067| }
+ 1033|     if (key.startsWith('MOCHI')) {
+ 1034|       return { roll: Math.sin(this.phase * Math.PI * 4) * 0.05 * loco, spine: 0.19 * loco, headPitch: -0.05 * speed01 };
+ 1035|     }
+ 1036|     if (t.locomotion === 'skitter') {
+ 1037|       // ZIK alternating-tripod: low body, quick shimmy, head holds still
+ 1038|       return { roll: s * 0.07 * loco, spine: -0.05 * loco, headPitch: -0.06 * loco };
+ 1039|     }
+ 1040|     if (t.locomotion === 'hop') return { roll: 0, spine: 0, headPitch: 0 };
+ 1041|     return { roll: s * 0.08 * loco, spine: 0.09 * loco, headPitch: 0 };
+ 1042|   }
+ 1043| 
+ 1044|   /** Additive action poses, all in body-local radians / metres. */
+ 1045|   private _actionPose(id: ActionId, time: number): { pitch: number; lift: number; squash: number; roll: number } {
+ 1046|     const e = Math.min(1, time / 0.22);
+ 1047|     const osc = Math.sin(time * 9);
+ 1048|     const R = { pitch: 0, lift: 0, squash: 1, roll: 0 };
+ 1049|     switch (id) {
+ 1050|       // eat: dip the head, then chomp — the mouth itself is driven by _updateFace
+ 1051|       case 'eat': return { ...R, pitch: e * 0.40 + osc * 0.07, lift: -e * 0.03, squash: 1 + osc * 0.05 };
+ 1052|       case 'chomp': return { ...R, pitch: e * 0.44 + Math.sin(time * 22) * 0.05, lift: -e * 0.03, squash: 1 + Math.sin(time * 22) * 0.055 };
+ 1053|       case 'sniff': return { ...R, pitch: e * 0.46 + Math.sin(time * 7) * 0.07, lift: -e * 0.03, squash: 1 };
+ 1054|       case 'play': return { ...R, pitch: -e * 0.12, lift: Math.abs(Math.sin(time * 5)) * e * 0.10, squash: 1 + Math.sin(time * 5) * 0.10, roll: Math.sin(time * 4) * 0.10 * e };
+ 1055|       case 'pet': return { ...R, pitch: e * 0.14, lift: -e * 0.02, squash: 1 + Math.sin(time * 8) * 0.05 };
+ 1056|       // roll onto the back: a big roll plus a drop, held for the stroke
+ 1057|       case 'petRoll': {
+ 1058|         const u = Math.min(1, time / 0.35);
+ 1059|         return { pitch: -u * 0.55, lift: -u * 0.06, squash: 1 + Math.sin(time * 6) * 0.06, roll: u * 2.3 };
+ 1060|       }
+ 1061|       case 'sleep': return { ...R, pitch: e * 0.34, lift: -e * 0.07, squash: 1 - e * 0.08 };
+ 1062|       case 'greet': return { ...R, pitch: -e * 0.10, lift: Math.abs(Math.sin(time * 7)) * e * 0.09, squash: 1 + Math.sin(time * 7) * 0.05 };
+ 1063|       case 'wave': return { ...R, pitch: -e * 0.06, lift: Math.abs(Math.sin(time * 8)) * e * 0.05, squash: 1 };
+ 1064|       case 'startle': return { ...R, pitch: -e * 0.22, lift: e * 0.07, squash: 1 - e * 0.08 };
+ 1065|       case 'dig': return { ...R, pitch: e * 0.46 + Math.sin(time * 12) * 0.10, lift: -e * 0.04, squash: 1 };
+ 1066|       case 'splash': return { ...R, pitch: e * 0.18, lift: Math.abs(Math.sin(time * 14)) * e * 0.05, squash: 1 };
+ 1067|       case 'swim': return { ...R, pitch: e * 0.06, lift: Math.sin(time * 3) * e * 0.03, squash: 1 };
+ 1068|       case 'fly': return { ...R, pitch: -e * 0.14, lift: Math.sin(time * 6) * e * 0.05, squash: 1 };
+ 1069|       case 'perch': return { ...R, pitch: e * 0.06, squash: 1 };
+ 1070|       case 'carry': return { ...R, pitch: Math.sin(time * 7) * 0.14, squash: 1.12, roll: Math.sin(time * 5) * 0.12 };
+ 1071|       default: return R;
+ 1072|     }
+ 1073|   }
+ 1074| }
