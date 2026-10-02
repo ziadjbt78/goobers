@@ -56,15 +56,19 @@ Direct answers, no filler. English only.
 |---|---|---|
 | infra | repo, ship.sh, watch.sh, dump.sh (+ SEND THIS line) | DONE |
 | fixes | dust-ring fade, substep cap (38 -> 57 fps @ 12), night outline/rim dimming | DONE |
-| 1-5 (v12-v16) | locomotion rebuild (solve order, stepper, crouch, closed-loop IK, free legs, vertical lift), crowd, save/load, brain LOD | walk DONE (ZIK pass; PIP/MOCHI slips are action-only) |
-| 6 (v17) | procedural audio, exact save reload, walk-only gates, body-snap forensics, sim profiler | SHIPPED 2026-10-02 13:49, awaiting report |
+| 1-5 (v12-v16) | locomotion rebuild (solve order, stepper, crouch, closed-loop IK, free legs, vertical lift), crowd, save/load, brain LOD | DONE |
+| 6 (v17) | procedural audio, exact save reload, walk-only gates, body-snap forensics, sim profiler | DONE: walk slip PASS x3, save/load PASS, linear cost PASS |
+| 7 (v18) | torso rate limit 14 rad/s (Agent), soft IK 0.93->0.99, eased crouch, skeleton-only matrix sync, Euler reuse, profiler split, walk-joint + body-snap forensics, render budget, BODY gate | SHIPPED, awaiting report |
 
-## Last results (v16 watch 6dcf583)
-ZIK slip PASS. PIP/MOCHI slips 100% in actions (one-frame, clamp). Body bone 91 rad/s in actions (choreo snap).
-Save reload not identical (place() re-rolled spots). Headless sim 0.55 ms/creature (no profile yet).
+## Last results (v17 watch 8aa4202)
+WALK slip PASS all (worst 0.15 cm). WALK leg joint FAIL: PIP 36.1 knee_l, MOCHI 36.2 knee_br, ZIK 25.3 knee_rear_r (all planted).
+BODY snap: PIP 91 rad/s 'sleep', MOCHI 49 'sleep', BOP 28, ZIK 14. Action slips 100% one-frame pops (body snap drags hips).
+Save/load identical. Sim @24: brain 1.2 | motion+anim 6.0 | leg solve 6.2 | other 0.7 ms/step (headless).
 
 ## Next
-1. Read v17 report: walk gates, BODY snap action name, sim breakdown, save/load.
-2. Batch 7: fix the named body-snap action (blend in/out), optimise the biggest profiler bucket,
-   render LOD (far creatures drop outline/glints), then Sim.ts split (read Sim_00..04 fully first).
-3. Batch 8+: visual pass (soft shadows/contact shadows, bloom, grading, wind grass, water), faces, tools juice -> vertical slice.
+1. Read v18 report: BODY gates, WALK joint gate + its context line, motion+anim split, RENDER BUDGET line.
+2. If WALK joint still > 20: context line decides (hip-foot/reach ~0.99 -> lower SOFT_START; crouch step big -> slower ease;
+   since land ~0 -> landing frame; kick true -> action delta). If raw body snap is a roll-over, fix in Agent, not motion/*.
+3. Batch 8: render LOD (read HeroRenderer fully first: outline/glints/shadow per creature), optimise biggest profiler bucket,
+   Sim.ts split (tools.ts / probes.ts / save) with zero behaviour change.
+4. Batch 9+: visual pass (contact shadows, bloom, grading, wind grass, water), faces, tool juice -> vertical slice.

@@ -83,13 +83,18 @@ await safe('freeRun', async () => {
         const legs = a.hero.legs || [];
         { const bb = a.rig.body.quaternion, bq = bodyQ.get(a);
           if (bq) { const r = 2 * Math.acos(Math.min(1, Math.abs(bb.dot(bq)))) / dt; if (r > (o.bodyJ ?? 0)) { o.bodyJ = r; o.bodyAct = a.action; } bq.copy(bb); }
+          if ((a.bodyRaw ?? 0) > (o.rawMax ?? 0)) { o.rawMax = a.bodyRaw; o.rawAct = a.action; o.rawPiv = a.pivotAng ?? 0; o.rawBusy = a.motion.busy; }
           else bodyQ.set(a, bb.clone()); }
         let lq = legQ.get(a);
         if (!lq) { lq = legs.map((L) => [L.hip.quaternion.clone(), L.knee.quaternion.clone(), L.ankle.quaternion.clone()]); legQ.set(a, lq); }
         else if (!a.hero.legsFree) legs.forEach((L, li) => { [L.hip, L.knee, L.ankle].forEach((b, bi) => {
           const q = lq[li][bi]; const r = 2 * Math.acos(Math.min(1, Math.abs(b.quaternion.dot(q)))) / dt;
           if (r > (o.legJ ?? 0)) { o.legJ = r; o.legJBone = `${b.name}(${L.mode})`; }
-          if (!a.motion.busy && r > (o.wJ ?? 0)) { o.wJ = r; o.wJBone = `${b.name}(${L.mode})`; }
+          if (!a.motion.busy && r > (o.wJ ?? 0)) {
+            o.wJ = r; o.wJBone = `${b.name}(${L.mode})`;
+            const V = a.pos.constructor; const hp = L.hip.getWorldPosition(new V()), ap = L.ankle.getWorldPosition(new V());
+            o.wJctx = { rr: hp.distanceTo(ap) / Math.max(1e-4, L.reachW || 1), err: L.err ?? 0, landT: L.landT ?? 0, cd: a.hero.crouchD ?? 0, act: a.action, lifted: !!L.lifted, kick: !!(a.kicking && a.kicking.has && a.kicking.has(L.index)) };
+          }
           if (r > 20) o.legJFrames = (o.legJFrames ?? 0) + 1;
           q.copy(b.quaternion); }); });
         else legs.forEach((L, li) => { lq[li][0].copy(L.hip.quaternion); lq[li][1].copy(L.knee.quaternion); lq[li][2].copy(L.ankle.quaternion); });
@@ -158,7 +163,8 @@ await safe('freeRun', async () => {
   for (const x of [...ev].sort((p, q) => q.slip - p.slip).slice(0, 8))
     log(`    ${x.sp} leg ${x.leg}: slip ${(x.slip * 100).toFixed(1)} jump ${(x.jump * 100).toFixed(1)} cm | reach ${x.rr.toFixed(2)} | IK ${(x.err * 100).toFixed(1)} post ${(x.perr * 100).toFixed(1)} cm | ${x.busy ? 'ACTION' : 'walk'} | ${x.cause}`);
   for (const [sp, o] of Object.entries(free.out)) if (o.legJ) log(`  ${sp.padEnd(6)} LEG joint max ${o.legJ.toFixed(1)} rad/s on ${o.legJBone} | leg frames >20: ${o.legJFrames ?? 0}`);
-  for (const [sp, o] of Object.entries(free.out)) if (o.bodyJ) log(`  ${sp.padEnd(6)} BODY snap max ${o.bodyJ.toFixed(1)} rad/s during action '${o.bodyAct}'`);
+  for (const [sp, o] of Object.entries(free.out)) if (o.bodyJ) log(`  ${sp.padEnd(6)} BODY snap max ${o.bodyJ.toFixed(1)} rad/s (rendered) during '${o.bodyAct}' | raw target ${(o.rawMax ?? 0).toFixed(1)} rad/s during '${o.rawAct ?? '-'}' busy ${!!o.rawBusy} roll-over ${(o.rawPiv ?? 0).toFixed(2)} rad`);
+  for (const [sp, o] of Object.entries(free.out)) if (o.wJctx) { const c = o.wJctx; log(`  ${sp.padEnd(6)} WALK joint peak ${o.wJ.toFixed(1)} on ${o.wJBone} | hip-foot/reach ${c.rr.toFixed(3)} | IK miss ${(c.err * 100).toFixed(2)} cm | since land ${c.landT.toFixed(2)} s | crouch step ${(c.cd * 100).toFixed(2)} cm | action '${c.act}' | lifted ${c.lifted} | kick ${c.kick}`); }
   for (const [sp, o] of Object.entries(free.out)) {
     const avg = o.stances ? (o.sum / o.stances) * 100 : 0;
     log(`  ${sp.padEnd(6)} stances ${o.stances ?? 0} | slip avg ${avg.toFixed(2)} cm worst ${((o.worst ?? 0) * 100).toFixed(2)} cm | stances >1cm ${o.bad ?? 0} | max joint ${(o.joint ?? 0).toFixed(1)} rad/s on ${o.jointBone ?? '-'} | frames >20 rad/s ${o.kneeFrames ?? 0} | moving ${o.frames ? Math.round(100 * o.moving / o.frames) : 0}%`);
@@ -248,12 +254,13 @@ await safe('perf', async () => {
     const AG = s.agents[0] ? s.agents[0].constructor : null;
     const time = () => {
       for (let i = 0; i < 30; i++) s.step(dt);
-      s.prof.brain = 0; s.prof.agent = 0; if (AG) AG.legMs = 0;
+      s.prof.brain = 0; s.prof.agent = 0; if (AG) { AG.legMs = 0; AG.preMs = 0; AG.animMs = 0; AG.postMs = 0; }
       const t0 = performance.now();
       for (let i = 0; i < 120; i++) s.step(dt);
       const tot = performance.now() - t0;
       const legs = AG ? AG.legMs : 0;
-      bd = { brain: s.prof.brain / 120, motion: (s.prof.agent - legs) / 120, legs: legs / 120, other: (tot - s.prof.brain - s.prof.agent) / 120 };
+      bd = { brain: s.prof.brain / 120, motion: (s.prof.agent - legs) / 120, legs: legs / 120, other: (tot - s.prof.brain - s.prof.agent) / 120,
+        pre: AG ? AG.preMs / 120 : 0, anim: AG ? AG.animMs / 120 : 0, post: AG ? AG.postMs / 120 : 0 };
       return tot / 120;
     };
     const n0 = s.agents.length; const m0 = time();
@@ -265,6 +272,22 @@ await safe('perf', async () => {
   Object.assign(perf, r);
   log(`  ${r.n0} creatures ${r.m0.toFixed(2)} ms/step | ${r.n1} creatures ${r.m1.toFixed(2)} ms/step | ${(r.m1 / r.n1).toFixed(3)} ms per creature`);
   if (r.bd) log(`  breakdown @${r.n1}: brain ${r.bd.brain.toFixed(2)} | motion+anim ${r.bd.motion.toFixed(2)} | leg solve ${r.bd.legs.toFixed(2)} | other ${r.bd.other.toFixed(2)} ms/step`);
+  if (r.bd) log(`  motion+anim split: preAnimate ${r.bd.pre.toFixed(2)} | HeroAnimator ${r.bd.anim.toFixed(2)} | postAnimate ${r.bd.post.toFixed(2)} | rest of Agent ${(r.bd.motion - r.bd.pre - r.bd.anim - r.bd.post).toFixed(2)} ms/step`);
+});
+
+log('\n## RENDER BUDGET (one frame, home camera; counts matter, not ms)');
+await safe('render', async () => {
+  const ri = await p.evaluate(() => {
+    const s = window.__lab, r = s.stage.renderer, inf = r.info;
+    for (const a of s.agents) a.handle.group.visible = true;
+    s.stage.camera.position.set(0.4, 8.4, 14.2); s.stage.camera.lookAt(0, 0.6, 0);
+    const ar = inf.autoReset; inf.autoReset = false; inf.reset();
+    s.renderOnce();
+    const out = { n: s.agents.length, calls: inf.render.calls, tris: inf.render.triangles, geos: inf.memory.geometries, tex: inf.memory.textures, progs: (inf.programs || []).length };
+    inf.autoReset = ar;
+    return out;
+  });
+  log(`  ${ri.n} creatures | draw calls ${ri.calls} | triangles ${ri.tris} | geometries ${ri.geos} | textures ${ri.tex} | shader programs ${ri.progs}`);
 });
 
 log('\n## GATES');
@@ -278,6 +301,7 @@ for (const sp of ['PIP', 'MOCHI', 'ZIK']) {
   gate(`${sp} WALK leg joint <= 20 rad/s`, (o.wJ ?? 0) <= 20, `${(o.wJ ?? 0).toFixed(1)} on ${o.wJBone ?? '-'}`);
   log(`  WARN  ${(sp + ' in actions').padEnd(30)} worst ${((o.worst ?? 0) * 100).toFixed(1)} cm | ${pct.toFixed(1)}% steps | leg joint ${(o.legJ ?? 0).toFixed(1)} | body ${(o.bodyJ ?? 0).toFixed(0)} rad/s '${o.bodyAct ?? '-'}'`);
 }
+for (const sp of ['PIP', 'MOCHI', 'BOP', 'ZIK']) { const o = free?.out?.[sp]; if (o) gate(`${sp} BODY snap <= 20 rad/s`, (o.bodyJ ?? 0) <= 20, `${(o.bodyJ ?? 0).toFixed(1)} during '${o.bodyAct ?? '-'}'`); }
 gate('overlap frames = 0', !!free && free.overlapFrames === 0, free ? free.overlapFrames : '-');
 gate('console errors = 0', errs.length === 0, errs.length);
 gate('save/load identical', saveOK, saveOK ? 'yes' : 'no');

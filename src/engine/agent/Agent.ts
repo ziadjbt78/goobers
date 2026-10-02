@@ -38,6 +38,8 @@ export interface Foot {
 /** Absolute turn-rate ceiling, rad/s. Locomotion enforces its own per-species cap. */
 export const TURN_RATE = 2.6;
 const ARRIVE = 0.30;
+/** v18: the torso may turn at most this fast (rad/s): actions blend, never snap */
+const BODY_RATE = 14;
 const SLOW_RADIUS = 0.85;
 
 /** animator action -> the Choreo action the motion layer plays for it. */
@@ -93,6 +95,16 @@ export class Agent implements HashEntry {
   private static NEXT_ID = 1;
   /** v17 profiler: total ms spent in the world leg solve */
   static legMs = 0;
+  /** v18 profiler split (ms, accumulated; watch.mjs resets) */
+  static preMs = 0;
+  static animMs = 0;
+  static postMs = 0;
+  /** v18 body-snap forensics: raw (pre-limit) torso rate, rad/s, and roll-over angle */
+  bodyRaw = 0;
+  pivotAng = 0;
+  private bodyPrev = new THREE.Quaternion();
+  private bodyInit = false;
+  private _bq = new THREE.Quaternion();
 
   constructor(world: World, template: HeroTemplate, dna: HeroDNA, handle: HeroHandle, seed: number) {
     this.id = Agent.NEXT_ID++;
@@ -307,9 +319,13 @@ export class Agent implements HashEntry {
     this.hero.drive.heading = loco.heading;
     this.hero.drive.groundY = heightAt;
 
+    const tp0 = performance.now();
     this.motion.preAnimate(dt, this.desired);
+    const tp1 = performance.now();
     this.hero.update(dt, null);
+    const tp2 = performance.now();
     this.motion.postAnimate(dt);
+    Agent.preMs += tp1 - tp0; Agent.animMs += tp2 - tp1; Agent.postMs += performance.now() - tp2;
     this.applyDebugPose();
 
     // ---- v10: MOVE THE JUICE OFF THE PIVOT AND ONTO THE BODY --------------
@@ -327,7 +343,8 @@ export class Agent implements HashEntry {
       // the WHOLE juice rotation moves to the body, not just the roll-over:
       // reading only rotation.z silently discarded every pitch the motion
       // layer applied, which is why the G-key pitch probe read 0.0000 m.
-      this.rolled = 2 * Math.acos(Math.min(1, Math.abs(pivot.quaternion.w))) > 0.6;
+      this.pivotAng = 2 * Math.acos(Math.min(1, Math.abs(pivot.quaternion.w)));
+      this.rolled = this.pivotAng > 0.6;
       // v15: hysteresis, so a bouncy action cannot flicker the feet free/planted
       const py = pivot.position.y;
       this.hopping = this.motion.busy && (this.hopping ? py > 0.025 * this.bulk : py > 0.06 * this.bulk);
@@ -335,6 +352,22 @@ export class Agent implements HashEntry {
         body.quaternion.multiply(pivot.quaternion);
       }
       pivot.position.set(0, 0, 0); pivot.scale.set(1, 1, 1); pivot.rotation.set(0, 0, 0);
+    }
+
+    // v18: torso rate limit. Choreo / juice targets can jump (sleep, landings);
+    // the body now eases toward them, so hips and planted knees never pop.
+    if (!this.debugPose && !this.noPivotJuice) {
+      const bq = body.quaternion;
+      if (this.bodyInit) {
+        const ang = 2 * Math.acos(Math.min(1, Math.abs(bq.dot(this.bodyPrev))));
+        this.bodyRaw = dt > 0 ? ang / dt : 0;
+        const maxB = BODY_RATE * dt;
+        if (ang > maxB && ang > 1e-6) { this._bq.copy(bq); bq.copy(this.bodyPrev).slerp(this._bq, maxB / ang); }
+      }
+      this.bodyPrev.copy(bq);
+      this.bodyInit = true;
+    } else {
+      this.bodyInit = false;
     }
 
     // v12: legs solve LAST, against the final root / heading / body pose. Any
@@ -381,8 +414,8 @@ export class Agent implements HashEntry {
    */
   private readFeet(): void {
     const t = this.template;
-    const g = this.handle.group;
-    g.updateMatrixWorld(true);
+    // v18: refresh the skeleton only (ancestors + bones), not every mesh in the group
+    this.handle.bones[0]?.updateWorldMatrix(true, true);
     const loco = this.motion.loco;
     for (let i = 0; i < this.feet.length; i++) {
       const f = this.feet[i];

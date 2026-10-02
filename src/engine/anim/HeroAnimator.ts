@@ -29,6 +29,9 @@ const LEG_RATE = 18;
 const DUTY = 0.6;
 /** v13: last-resort cap on a PLANTED leg, so a straight-leg branch flip can never pop. */
 const PLANT_RATE = 40;
+/** v18 soft IK band: reach is untouched below SOFT_START and approaches SOFT_TOP asymptotically */
+const SOFT_START = 0.93;
+const SOFT_TOP = 0.99;
 function crossedPhase(a: number, b: number, m: number): boolean {
   if (b >= a) return a < m && b >= m;
   return a < m || b >= m;
@@ -217,6 +220,8 @@ export class HeroAnimator {
   private _v = new THREE.Vector3();
   private _pole = new THREE.Vector3();
   private _q = new THREE.Quaternion();
+  /** v18: reused, no per-frame Euler allocation */
+  private _e = new THREE.Euler();
 
   constructor(template: HeroTemplate, handle: HeroHandle) {
     this.template = template;
@@ -536,7 +541,7 @@ export class HeroAnimator {
 
     const style = this._gaitFlavour(loco, speed01);
     const roll = bodyRoll + style.roll + actionRoll * act;
-    this._q.setFromEuler(new THREE.Euler(
+    this._q.setFromEuler(this._e.set(
       bodyPitch + actionPitch * act,
       this.bodyYaw + (this.driven ? headLead * 0.25 : 0),
       roll,
@@ -553,7 +558,7 @@ export class HeroAnimator {
       b.rotateX(w);
     }
 
-    head.quaternion.setFromEuler(new THREE.Euler(
+    head.quaternion.setFromEuler(this._e.set(
       this.headPitch - bodyPitch * 0.5 + style.headPitch - actionPitch * act * 0.6,
       headLead,
       0,
@@ -742,6 +747,8 @@ export class HeroAnimator {
   /** v14: legs hang free this frame (held, rolled, mid-jump) */
   legsFree = false;
   liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 };
+  /** v18: |crouch change| this frame, for joint forensics */
+  crouchD = 0;
   resetLiftStats(): void { this.liftStats = { beat: 0, hard: 0, strain: 0, soft: 0, maxErr: 0 }; }
 
   solveWorldLegs(dt: number, free: boolean): void {
@@ -771,7 +778,7 @@ export class HeroAnimator {
       return;
     }
     const h = this.handle;
-    h.group.updateMatrixWorld(true);
+    h.bones[0].updateWorldMatrix(true, true); // v18: skeleton only, not every mesh
 
     // v13 CROUCH: stubby legs plus the cartoon bob put the hips higher than the
     // legs can reach, so a planted foot had zero horizontal room and HAD to slide.
@@ -788,12 +795,15 @@ export class HeroAnimator {
       const gy = (ground ? ground(this._rw.x, this._rw.z) : h.group.position.y) + L.plant.y;
       need = Math.max(need, Math.min(0.5 * L.reachW, hip.y - gy - kH * L.reachW));
     }
-    this.crouch = need > this.crouch ? need : this.crouch + (need - this.crouch) * Math.min(1, dt / 0.25);
+    const c0 = this.crouch;
+    // v18: the crouch EASES down fast instead of snapping; an instant root drop popped every planted knee
+    this.crouch += (need - this.crouch) * Math.min(1, dt / (need > this.crouch ? 0.06 : 0.25));
+    this.crouchD = Math.abs(this.crouch - c0);
     if (this.crouch > 1e-5) {
       const root = h.bones[0];
       const ps = root.parent ? root.parent.getWorldScale(this._sc).y : 1;
       root.position.y -= this.crouch / Math.max(1e-4, ps);
-      h.group.updateMatrixWorld(true);
+      root.updateWorldMatrix(false, true);
     }
 
     const gq = h.group.getWorldQuaternion(this._q);
@@ -835,7 +845,7 @@ export class HeroAnimator {
           if (this._ft.y < minY) { L.lifted = minY - this._ft.y > 0.01; this._ft.y = minY; }
         }
       }
-      this._clampReach(this._ft, hip, rMax);
+      this._softReach(this._ft, hip, L.reachW);
       // v17: clamped along hip->lock = raised off the ground, not sliding on it
       if (L.mode === 'plant' && !L.landPending && this._ft.distanceTo(this._lk) > 0.01) L.lifted = true;
       this._goal.copy(this._ft);
@@ -850,7 +860,7 @@ export class HeroAnimator {
         err = Math.hypot(ex, ey, ez);
         if (err < 0.0015) break;
         this._ft.x += ex; this._ft.y += ey; this._ft.z += ez;
-        this._clampReach(this._ft, hip, rMax);
+        this._clampReach(this._ft, hip, 0.995 * L.reachW);
       }
       L.err = err;
       if (L.mode === 'plant' && !L.landPending && err > this.liftStats.maxErr) this.liftStats.maxErr = err;
@@ -873,6 +883,18 @@ export class HeroAnimator {
       const kick = Math.max(0, Math.sin(this.kickT * 9)) * 0.85;
       if (kick > 0.02) back.hip.rotateX(-kick);
     }
+  }
+
+  /** v18 soft IK: below SOFT_START the target is untouched; beyond it the reach approaches
+   *  SOFT_TOP asymptotically, so a near-straight knee eases instead of snapping. */
+  private _softReach(v: THREE.Vector3, hip: THREE.Vector3, reach: number): void {
+    if (reach <= 1e-4) return;
+    const d = v.distanceTo(hip);
+    const ds = SOFT_START * reach;
+    if (d <= ds) return;
+    const s = (SOFT_TOP - SOFT_START) * reach;
+    const d2 = ds + s * (1 - Math.exp(-(d - ds) / s));
+    v.sub(hip).multiplyScalar(d2 / d).add(hip);
   }
 
   private _clampReach(v: THREE.Vector3, hip: THREE.Vector3, r: number): void {

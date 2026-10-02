@@ -155,3 +155,10 @@ kills that shell. Kill by port (`lsof -ti:8137 | xargs -r kill -9`) and start wi
 - audio.ts: procedural WebAudio (footsteps by size, mood voices, tool SFX, wind/birds/crickets), Shift+M mute.
 - Save reload restores exact position/heading. Clamped planted foot = lifted (airborne).
 - watch: gates on WALK only (actions = WARN), BODY snap forensics, sim profiler breakdown, linear-scaling gate.
+
+
+## v18 (batch 7)
+- Agent: torso rate limit (BODY_RATE 14 rad/s) after the juice merge; actions blend instead of snapping. Raw rate + roll-over angle kept for forensics.
+- HeroAnimator: soft IK (reach untouched to 0.93, asymptotic to 0.99) so knees never lock straight; crouch eases down (0.06 s) instead of snapping; closed-loop re-aim hard-clamps at 0.995.
+- Perf: leg solve and readFeet refresh only the skeleton, not every mesh; Euler objects reused; profiler split into preAnimate / HeroAnimator / postAnimate.
+- watch: WALK joint peak context, raw body snap, RENDER BUDGET (draw calls, triangles), BODY snap <= 20 rad/s gate.
